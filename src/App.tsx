@@ -12,17 +12,15 @@ interface ControlButtonProps {
 
 const styles = `
   .hud-container {
-    background-color: #030712;
-    background-image:
-      radial-gradient(circle at center, #061126 0%, #030712 70%);
+    background-color: #010204;
     font-family: 'Courier New', Courier, monospace;
     overflow: hidden;
   }
 
   .fairy-core {
     position: relative;
-    width: 600px;
-    height: 600px;
+    width: 700px;
+    height: 700px;
   }
 
   .abs-center {
@@ -32,22 +30,95 @@ const styles = `
     transform: translate(-50%, -50%);
   }
 
-  .layer-glow {
+  /* ===== GLOW SYSTEM =====
+     双层环形渐变 + 紧凑 blur，集中在环边，快速衰减到纯黑。
+  */
+
+  /* ── 弥散辉光 ──
+     460px = 230px 半径；82.6% = 190px = 环边
+     窄梯度 + 小 blur → 集中、饱和、快速衰减  */
+  @keyframes haloWander {
+    0%   { transform: translate(-50%, -50%); opacity: 0.92; }
+    25%  { transform: translate(calc(-50% + 3px), calc(-50% - 2px)); opacity: 1.00; }
+    50%  { transform: translate(calc(-50% - 2px), calc(-50% + 3px)); opacity: 0.94; }
+    75%  { transform: translate(calc(-50% + 2px), calc(-50% + 1px)); opacity: 0.97; }
+    100% { transform: translate(-50%, -50%); opacity: 0.92; }
+  }
+  .layer-glow-halo {
+    width: 460px;
+    height: 460px;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+      transparent                     78%,
+      rgba( 15,  60, 150, 0.06)      80%,
+      rgba( 40, 130, 235, 0.95)      82.6%,
+      rgba( 30, 100, 200, 0.45)      86%,
+      rgba( 10,  45, 120, 0.06)      90%,
+      transparent                    93%);
+    filter: blur(10px);
+    animation: haloWander 8s ease-in-out infinite;
+    z-index: 0;
+    transition: opacity 0.15s ease-out;
+  }
+
+  /* ── 第二层辉光 — 略偏移，制造非均匀感 ── */
+  .layer-glow-halo2 {
     width: 450px;
     height: 450px;
-    background: radial-gradient(circle, #0044ff 0%, transparent 60%);
-    filter: blur(40px);
-    opacity: 0.25;
+    border-radius: 50%;
+    background: radial-gradient(circle at 48% 46%,
+      transparent                     77%,
+      rgba( 20,  80, 180, 0.30)      81%,
+      rgba( 50, 140, 240, 0.50)      83%,
+      rgba( 20,  70, 160, 0.12)      87%,
+      transparent                    91%);
+    filter: blur(12px);
     z-index: 0;
-    transition: transform 0.1s ease-out, opacity 0.1s ease-out;
+    opacity: 0.7;
+  }
+
+  /* ── 环边亮带 — 极窄高亮 ──
+     400px = 200px 半径；95% = 190px */
+  @keyframes ringPulse {
+    0%   { opacity: 0.88; }
+    50%  { opacity: 1.00; }
+    100% { opacity: 0.88; }
+  }
+  .layer-glow-ring {
+    width: 400px;
+    height: 400px;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+      transparent                    91%,
+      rgba(150, 210, 255, 1.00)      95%,
+      rgba( 40, 110, 200, 0.12)      98%,
+      transparent                    100%);
+    filter: blur(3px);
+    animation: ringPulse 3.5s ease-in-out infinite;
+    animation-delay: -1s;
+    z-index: 0;
+  }
+
+  /* 背景圆盘 */
+  .layer-bg-disc {
+    position: absolute;
+    width: 376px;
+    height: 376px;
+    background: rgb(11, 46, 104);
+    border-radius: 50%;
+    z-index: 5;
   }
 
   .layer-thin-ring {
     width: 380px;
     height: 380px;
-    border: 2px solid #1a3a6b;
+    border: 2px solid #3d78b9;
     border-radius: 50%;
-    box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.5);
+    box-shadow:
+      inset 0 0 10px rgba(0, 0, 0, 0.5),
+      0 0  3px  1px rgba(200, 230, 255, 1.00),
+      0 0  8px  3px rgba(120, 190, 255, 0.85),
+      0 0 18px  6px rgba( 50, 130, 210, 0.40);
     z-index: 10;
   }
 
@@ -55,49 +126,37 @@ const styles = `
     width: 340px;
     height: 340px;
     z-index: 20;
-    filter: drop-shadow(0 0 10px rgba(10, 50, 150, 0.5));
-  }
-  .gyro-circle {
-    width: 310px;
-    height: 310px;
-    background: #112a57;
-    border-radius: 50%;
-  }
-  .gyro-square {
-    width: 236px;
-    height: 236px;
-    background: #112a57;
-    border-radius: 16px;
-    transform: translate(-50%, -50%) rotate(45deg);
+    filter: drop-shadow(0 0 8px rgba(10, 50, 150, 0.4));
   }
 
   .layer-thick-white {
-    width: 280px;
-    height: 280px;
-    border: 40px solid #eef4fc;
+    width: 238px;
+    height: 238px;
+    border: 64px solid #ffffff;
     border-radius: 50%;
     box-sizing: border-box;
     box-shadow:
-      0 0 25px rgba(20, 100, 255, 0.5),
-      inset 0 0 15px rgba(15, 45, 110, 0.6);
+      0 0  4px  1px rgba(255, 255, 255, 0.80),
+      0 0 12px  4px rgba(160, 210, 255, 0.50),
+      0 0 25px  8px rgba( 50, 130, 210, 0.18);
     z-index: 30;
     transition: box-shadow 0.1s ease-out;
   }
 
   .layer-inner-blue {
-    width: 200px;
-    height: 200px;
-    border: 30px solid #234b8c;
+    width: 168px;
+    height: 168px;
+    border: 24px solid rgb(166, 182, 219);
     border-radius: 50%;
     box-sizing: border-box;
-    box-shadow: inset 0 0 25px rgba(0, 8, 25, 0.9);
+    box-shadow: none;
     z-index: 40;
   }
 
   .layer-void {
-    width: 140px;
-    height: 140px;
-    background: radial-gradient(circle, #02050b 0%, #061129 100%);
+    width: 72px;
+    height: 72px;
+    background: rgb(6, 53, 120);
     border-radius: 50%;
     box-shadow: inset 0 0 20px #000;
     z-index: 50;
@@ -121,7 +180,7 @@ const styles = `
     height: 46px;
     background: #ffffff;
     border-radius: 50%;
-    transform: translate(-50%, -50%) translateY(-100px);
+    transform: translate(-50%, -50%) translateY(-50px);
     box-shadow:
       0 0 15px rgba(255, 255, 255, 0.9),
       0 0 35px rgba(50, 150, 255, 0.8);
@@ -189,25 +248,23 @@ export default function App() {
       const normalizedVol = s.audioSmoothData / 255;
 
       if (glowRef.current) {
-        glowRef.current.style.transform = `translate(-50%, -50%) scale(${1 + normalizedVol * 0.4})`;
-        glowRef.current.style.opacity = String(0.25 + normalizedVol * 0.5);
+        glowRef.current.style.opacity = String(0.85 + normalizedVol * 0.15);
       }
 
       if (thickRingRef.current) {
-        const baseInner = `inset 0 0 15px rgba(15, 45, 110, 0.6)`;
         const glow = normalizedVol > 0.05
-          ? `, 0 0 ${25 + normalizedVol * 60}px rgba(50, 160, 255, ${0.5 + normalizedVol * 0.4})`
-          : `, 0 0 25px rgba(20, 100, 255, 0.5)`;
-        thickRingRef.current.style.boxShadow = baseInner + glow;
+          ? `0 0 ${25 + normalizedVol * 60}px rgba(50, 160, 255, ${0.5 + normalizedVol * 0.4})`
+          : `0 0 25px rgba(20, 100, 255, 0.5)`;
+        thickRingRef.current.style.boxShadow = glow;
       }
 
       if (ballRef.current) {
         if (normalizedVol > 0.05) {
           ballRef.current.style.boxShadow = `0 0 25px rgba(255, 255, 255, 1), 0 0 ${40 + normalizedVol * 80}px rgba(50, 180, 255, 0.9)`;
-          ballRef.current.style.transform = `translate(-50%, -50%) translateY(-100px) scale(${1 + normalizedVol * 0.15})`;
+          ballRef.current.style.transform = `translate(-50%, -50%) translateY(-50px) scale(${1 + normalizedVol * 0.15})`;
         } else {
           ballRef.current.style.boxShadow = `0 0 15px rgba(255, 255, 255, 0.9), 0 0 35px rgba(50, 150, 255, 0.8)`;
-          ballRef.current.style.transform = `translate(-50%, -50%) translateY(-100px) scale(1)`;
+          ballRef.current.style.transform = `translate(-50%, -50%) translateY(-50px) scale(1)`;
         }
       }
 
@@ -274,11 +331,27 @@ export default function App() {
       </div>
 
       <div className="fairy-core">
-        <div ref={glowRef} className="abs-center layer-glow"></div>
+        {/* 辉光层 z:0 */}
+        <div ref={glowRef} className="abs-center layer-glow-halo"></div>
+        <div className="abs-center layer-glow-halo2"></div>
+        <div className="abs-center layer-glow-ring"></div>
+        {/* 内盘遮挡 z:5 */}
+        <div className="abs-center layer-bg-disc"></div>
         <div className="abs-center layer-thin-ring"></div>
         <div ref={gyroRef} className="abs-center layer-gyro-wrapper">
-          <div className="abs-center gyro-circle"></div>
-          <div className="abs-center gyro-square"></div>
+          <svg width="340" height="340" viewBox="0 0 340 340" style={{display:'block'}}>
+            <path
+              d="M 151.7 27.4 L 170 5 L 188.3 27.4
+                 A 145 145 0 0 1 312.6 151.7
+                 L 335 170 L 312.6 188.3
+                 A 145 145 0 0 1 188.3 312.6
+                 L 170 335 L 151.7 312.6
+                 A 145 145 0 0 1 27.4 188.3
+                 L 5 170 L 27.4 151.7
+                 A 145 145 0 0 1 151.7 27.4 Z"
+              fill="rgb(7, 22, 72)"
+            />
+          </svg>
         </div>
         <div ref={thickRingRef} className="abs-center layer-thick-white"></div>
         <div className="abs-center layer-inner-blue"></div>
