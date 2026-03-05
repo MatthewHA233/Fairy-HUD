@@ -92,43 +92,91 @@ def radial_profiles_bgr(
     frame: np.ndarray, cx: int, cy: int, max_r: int,
     ball_mask: np.ndarray | None = None, num_angles: int = 360,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """BGR 三通道径向剖面, 可选遮罩掉小球"""
+    """BGR 三通道径向剖面 (角度平均), 用于颜色报告"""
     h, w = frame.shape[:2]
-    profiles = np.zeros((3, max_r), dtype=np.float64)
-    counts = np.zeros(max_r, dtype=np.float64)
-
     angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
     cos_a = np.cos(angles)
     sin_a = np.sin(angles)
+    rs = np.arange(max_r)
 
-    for r in range(max_r):
-        xs = (cx + r * cos_a).astype(int)
-        ys = (cy + r * sin_a).astype(int)
-        valid = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
+    all_x = np.clip((cx + rs[None, :] * cos_a[:, None]).astype(int), 0, w - 1)
+    all_y = np.clip((cy + rs[None, :] * sin_a[:, None]).astype(int), 0, h - 1)
 
-        vx = xs[valid]
-        vy = ys[valid]
+    sampled = frame[all_y, all_x].astype(np.float64)  # (num_angles, max_r, 3)
 
-        if ball_mask is not None:
-            # 排除小球区域的采样点
-            not_ball = ball_mask[vy, vx] > 0
-            vx = vx[not_ball]
-            vy = vy[not_ball]
+    if ball_mask is not None:
+        bmask = ball_mask[all_y, all_x] > 0
+        sampled[~bmask] = np.nan
 
-        if len(vx) == 0:
-            continue
+    with np.errstate(all='ignore'):
+        avg = np.nanmean(sampled, axis=0)  # (max_r, 3)
+    avg = np.nan_to_num(avg)
 
-        pixels = frame[vy, vx]
-        profiles[0, r] = np.mean(pixels[:, 0])
-        profiles[1, r] = np.mean(pixels[:, 1])
-        profiles[2, r] = np.mean(pixels[:, 2])
-        counts[r] = len(vx)
+    return avg[:, 0], avg[:, 1], avg[:, 2]
 
-    return profiles[0], profiles[1], profiles[2]
+
+def compute_per_ray_edges(
+    frame: np.ndarray, cx: int, cy: int, max_r: int,
+    ball_mask: np.ndarray | None = None, num_angles: int = 180,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    逐射线梯度法: 每条射线独立计算梯度，再聚合。
+    返回 (mean_edge, p75_edge, std_edge, color_var):
+      - mean: 适合检测完整圆环
+      - p75: 适合检测旋转/局部特征 (陀螺仪)
+      - std: 角度方差 — 高方差意味着局部特征 (旋转元件)
+      - color_var: 每个半径上颜色的角度方差 (检测旋转体)
+    """
+    h, w = frame.shape[:2]
+    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
+    cos_a = np.cos(angles)
+    sin_a = np.sin(angles)
+    rs = np.arange(max_r)
+
+    all_x = np.clip((cx + rs[None, :] * cos_a[:, None]).astype(int), 0, w - 1)
+    all_y = np.clip((cy + rs[None, :] * sin_a[:, None]).astype(int), 0, h - 1)
+
+    sampled = frame[all_y, all_x].astype(np.float64)  # (num_angles, max_r, 3)
+
+    if ball_mask is not None:
+        bmask = ball_mask[all_y, all_x] > 0
+        sampled[~bmask] = 0
+
+    k = np.array([1, 2, 4, 2, 1], dtype=np.float64)
+    k /= k.sum()
+
+    edge_map = np.zeros((num_angles, max_r), dtype=np.float64)
+
+    for ai in range(num_angles):
+        ray = sampled[ai]  # (max_r, 3)
+        smoothed = np.zeros_like(ray)
+        for ch in range(3):
+            smoothed[:, ch] = np.convolve(ray[:, ch], k, mode='same')
+
+        # 亮度梯度
+        grad = np.abs(np.gradient(smoothed, axis=0))  # (max_r, 3)
+        lum_edge = np.max(grad, axis=1)
+
+        # 色彩梯度
+        bg_d = np.abs(np.gradient(np.abs(smoothed[:, 0] - smoothed[:, 1])))
+        br_d = np.abs(np.gradient(np.abs(smoothed[:, 0] - smoothed[:, 2])))
+        gr_d = np.abs(np.gradient(np.abs(smoothed[:, 1] - smoothed[:, 2])))
+        color_edge = np.maximum(np.maximum(bg_d, br_d), gr_d)
+
+        edge_map[ai] = lum_edge + color_edge * 0.8
+
+    mean_edge = np.mean(edge_map, axis=0)
+    p75_edge = np.percentile(edge_map, 75, axis=0)
+    std_edge = np.std(edge_map, axis=0)
+
+    # 颜色角度方差: 每个半径上 BGR 值的方差 (检测旋转体颜色不均匀)
+    color_var = np.mean(np.std(sampled, axis=0), axis=1)  # mean of per-channel std
+
+    return mean_edge, p75_edge, std_edge, color_var
 
 
 def compute_edge_profile(b: np.ndarray, g: np.ndarray, r: np.ndarray) -> np.ndarray:
-    """三通道梯度合成边缘强度"""
+    """旧方法: 从角度平均 BGR 算梯度 (仅用于 Pass 2 快速追踪)"""
     k = np.array([1, 2, 3, 2, 1], dtype=np.float64)
     k /= k.sum()
 
@@ -140,10 +188,8 @@ def compute_edge_profile(b: np.ndarray, g: np.ndarray, r: np.ndarray) -> np.ndar
     gg = np.abs(np.gradient(gs))
     rg = np.abs(np.gradient(rs))
 
-    # 亮度梯度: 各通道最大值
     lum_edge = np.maximum(np.maximum(bg, gg), rg)
 
-    # 色彩梯度: 通道差的变化
     bg_d = np.abs(np.gradient(np.convolve(np.abs(bs - gs), k, mode='same')))
     br_d = np.abs(np.gradient(np.convolve(np.abs(bs - rs), k, mode='same')))
     gr_d = np.abs(np.gradient(np.convolve(np.abs(gs - rs), k, mode='same')))
@@ -152,9 +198,12 @@ def compute_edge_profile(b: np.ndarray, g: np.ndarray, r: np.ndarray) -> np.ndar
     return lum_edge + color_edge * 0.8
 
 
-def find_edge_peaks(profile: np.ndarray, min_prom: float = 2.0, min_dist: int = 3, skip: int = 3) -> list[dict]:
+def find_edge_peaks(profile: np.ndarray, min_prom: float = 1.5, min_dist: int = 3,
+                    min_r: int = 8, max_r: int | None = None) -> list[dict]:
     data = profile.copy()
-    data[:skip] = 0
+    data[:min_r] = 0
+    if max_r is not None:
+        data[max_r:] = 0
     peaks = []
     n = len(data)
     for i in range(2, n - 2):
@@ -171,6 +220,43 @@ def find_edge_peaks(profile: np.ndarray, min_prom: float = 2.0, min_dist: int = 
             continue
         peaks.append({"radius": i, "edge_strength": float(data[i]), "prominence": float(prom)})
     return peaks
+
+
+def find_color_steps(avg_b: np.ndarray, avg_g: np.ndarray, avg_r: np.ndarray,
+                     min_r: int = 15, max_r: int | None = None,
+                     window: int = 6, min_step: float = 25.0,
+                     min_dist: int = 8) -> tuple[list[dict], np.ndarray]:
+    """
+    颜色阶跃法: 比较每个半径两侧窗口的平均颜色差异 (欧氏距离).
+    比梯度峰值法更鲁棒——能准确找到人眼可见的区域分界线,
+    而非梯度最陡点 (梯度峰常偏移真实边界 5-10px).
+
+    返回 (boundaries, step_profile)
+    """
+    n = len(avg_b)
+    lo = min_r + window
+    hi = min(max_r or n, n) - window
+    step = np.zeros(n, dtype=np.float64)
+
+    for r in range(lo, hi):
+        b_in = np.mean(avg_b[r - window:r])
+        g_in = np.mean(avg_g[r - window:r])
+        r_in = np.mean(avg_r[r - window:r])
+        b_out = np.mean(avg_b[r:r + window])
+        g_out = np.mean(avg_g[r:r + window])
+        r_out = np.mean(avg_r[r:r + window])
+        step[r] = ((b_in - b_out)**2 + (g_in - g_out)**2 + (r_in - r_out)**2) ** 0.5
+
+    # 在阶跃剖面中找峰值
+    peaks = find_edge_peaks(step, min_prom=min_step * 0.15, min_dist=min_dist,
+                            min_r=lo, max_r=hi)
+
+    # 只保留阶跃强度 >= min_step 的
+    boundaries = [pk for pk in peaks if step[pk["radius"]] >= min_step]
+    for b in boundaries:
+        b["color_step"] = float(step[b["radius"]])
+
+    return boundaries, step
 
 
 def color_name(b, g, r):
@@ -192,14 +278,23 @@ def color_name(b, g, r):
     return f"({b:.0f},{g:.0f},{r:.0f})"
 
 
-def describe_boundary(bp, gp, rp, radius):
-    inner = max(0, radius - 3)
-    outer = min(len(bp) - 1, radius + 3)
-    return f"{color_name(bp[inner], gp[inner], rp[inner])} -> {color_name(bp[outer], gp[outer], rp[outer])}"
+def describe_boundary(bp, gp, rp, radius, half_w: int = 5):
+    """采样分界线两侧 half_w 像素的平均颜色"""
+    n = len(bp)
+    i_lo, i_hi = max(0, radius - half_w), radius
+    o_lo, o_hi = radius, min(n, radius + half_w)
+    ib = np.mean(bp[i_lo:i_hi]) if i_hi > i_lo else bp[max(0, radius - 1)]
+    ig = np.mean(gp[i_lo:i_hi]) if i_hi > i_lo else gp[max(0, radius - 1)]
+    ir = np.mean(rp[i_lo:i_hi]) if i_hi > i_lo else rp[max(0, radius - 1)]
+    ob = np.mean(bp[o_lo:o_hi]) if o_hi > o_lo else bp[min(n - 1, radius + 1)]
+    og = np.mean(gp[o_lo:o_hi]) if o_hi > o_lo else gp[min(n - 1, radius + 1)]
+    or_ = np.mean(rp[o_lo:o_hi]) if o_hi > o_lo else rp[min(n - 1, radius + 1)]
+    return f"{color_name(ib, ig, ir)} -> {color_name(ob, og, or_)}"
 
 
 def analyze_video(video_path: str, sample_every: int = 2, preview: bool = False,
-                  min_prom: float = 2.5, center: tuple[int, int] | None = None) -> dict:
+                  min_prom: float = 1.5, min_r: int = 8, max_r_cut: int = 130,
+                  center: tuple[int, int] | None = None) -> dict:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         sys.exit(f"Error: cannot open {video_path}")
@@ -229,12 +324,16 @@ def analyze_video(video_path: str, sample_every: int = 2, preview: bool = False,
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    # ── Pass 1: 平均边缘剖面 ──
-    print("\n  Pass 1: Average edge profile (with ball masked)...")
-    avg_edge = np.zeros(max_r, dtype=np.float64)
+    # ── Pass 1: 逐射线边缘剖面 ──
+    print("\n  Pass 1: Per-ray edge profiling (mean + P75 + std + color_var)...")
+    avg_mean_edge = np.zeros(max_r, dtype=np.float64)
+    avg_p75_edge = np.zeros(max_r, dtype=np.float64)
+    avg_std_edge = np.zeros(max_r, dtype=np.float64)
+    avg_color_var = np.zeros(max_r, dtype=np.float64)
     avg_b = np.zeros(max_r, dtype=np.float64)
     avg_g = np.zeros(max_r, dtype=np.float64)
     avg_r_ch = np.zeros(max_r, dtype=np.float64)
+    all_frame_peaks = []  # 逐帧边界位置累积
     n_frames = 0
     fidx = 0
 
@@ -243,24 +342,91 @@ def analyze_video(video_path: str, sample_every: int = 2, preview: bool = False,
         if not ret:
             break
         if fidx % sample_every == 0:
-            # 每帧更新小球遮罩 (球会动)
             bm = create_ball_mask(frame, cx, cy, max_r)
             bp, gp, rp = radial_profiles_bgr(frame, cx, cy, max_r, ball_mask=bm, num_angles=180)
-            edge = compute_edge_profile(bp, gp, rp)
-            avg_edge += edge
+            mean_e, p75_e, std_e, cvar = compute_per_ray_edges(
+                frame, cx, cy, max_r, ball_mask=bm, num_angles=180)
+            avg_mean_edge += mean_e
+            avg_p75_edge += p75_e
+            avg_std_edge += std_e
+            avg_color_var += cvar
             avg_b += bp
             avg_g += gp
             avg_r_ch += rp
+
+            # ★ 逐帧颜色阶跃检测 (避免帧平均模糊边界)
+            frame_bounds, _ = find_color_steps(
+                bp, gp, rp, min_r=min_r, max_r=max_r_cut,
+                window=4, min_step=10.0, min_dist=4)
+            for fb in frame_bounds:
+                all_frame_peaks.append(fb["radius"])
+
             n_frames += 1
+            if n_frames % 20 == 0:
+                print(f"    sampled {n_frames} frames...")
         fidx += 1
 
-    avg_edge /= max(n_frames, 1)
+    avg_mean_edge /= max(n_frames, 1)
+    avg_p75_edge /= max(n_frames, 1)
+    avg_std_edge /= max(n_frames, 1)
+    avg_color_var /= max(n_frames, 1)
     avg_b /= max(n_frames, 1)
     avg_g /= max(n_frames, 1)
     avg_r_ch /= max(n_frames, 1)
 
-    rings = find_edge_peaks(avg_edge, min_prom, min_dist=3)
-    print(f"  Found {len(rings)} color boundaries:\n")
+    # 综合评分 (仅用于逐帧追踪和可视化)
+    avg_edge = 0.4 * avg_mean_edge + 0.6 * avg_p75_edge
+
+    # 帧平均的阶跃剖面 (仅用于可视化, 不用于检测)
+    _, step_profile = find_color_steps(
+        avg_b, avg_g, avg_r_ch,
+        min_r=min_r, max_r=max_r_cut,
+        window=4, min_step=10.0, min_dist=4)
+
+    # ── 主检测: 逐帧边界直方图聚类 ──
+    # 每帧独立检测边界位置, 然后用直方图找到频繁出现的位置
+    print(f"\n  Primary detection: Per-frame histogram clustering "
+          f"({len(all_frame_peaks)} peaks from {n_frames} frames)...")
+
+    hit_hist = np.zeros(max_r, dtype=np.float64)
+    for pos in all_frame_peaks:
+        if 0 <= pos < max_r:
+            hit_hist[pos] += 1
+
+    # 平滑直方图 (高斯近似, 宽度3)
+    k_smooth = np.array([1, 3, 5, 3, 1], dtype=np.float64)
+    k_smooth /= k_smooth.sum()
+    smooth_hist = np.convolve(hit_hist, k_smooth, mode='same')[:max_r]
+
+    # 在平滑直方图中找峰值
+    min_hits = n_frames * 0.10  # 至少 10% 帧出现
+    hist_peaks = find_edge_peaks(smooth_hist, min_prom=min_hits * 0.3,
+                                  min_dist=5, min_r=min_r, max_r=max_r_cut)
+    rings = [pk for pk in hist_peaks if smooth_hist[pk["radius"]] >= min_hits]
+
+    # 为每个边界添加颜色阶跃信息
+    for ring in rings:
+        r = ring["radius"]
+        ring["color_step"] = float(step_profile[r]) if r < len(step_profile) else 0
+        ring["hit_count"] = float(hit_hist[r])
+        ring["hit_rate"] = round(float(smooth_hist[r]) / n_frames, 2)
+
+    # ── Debug: 直方图在肉眼标注半径附近的值 ──
+    gt_radii = [68, 92, 97, 125, 167, 193, 196]
+    print(f"\n  [Debug] Histogram values at ground truth radii:")
+    for gr in gt_radii:
+        if gr < len(smooth_hist):
+            sv = smooth_hist[gr]
+            nearby = [(r, f"{smooth_hist[r]:.1f}") for r in range(max(0, gr-3), min(len(smooth_hist), gr+4))]
+            nearby_str = " ".join(f"{r}:{v}" for r, v in nearby)
+            print(f"    r={gr:>3}: hits={sv:>5.1f} ({sv/n_frames*100:.0f}%)  nearby=[{nearby_str}]")
+
+    # 排序和编号
+    rings.sort(key=lambda r: r["radius"])
+    for i, ring in enumerate(rings):
+        ring["id"] = i
+
+    print(f"\n  Found {len(rings)} total boundaries (r={min_r}..{max_r_cut}):\n")
 
     tracks = {}
     for i, ring in enumerate(rings):
@@ -268,8 +434,11 @@ def analyze_video(video_path: str, sample_every: int = 2, preview: bool = False,
         bd = describe_boundary(avg_b, avg_g, avg_r_ch, r)
         ring["boundary"] = bd
         ring["id"] = i
-        tracks[i] = {"id": i, "ref_r": r, "boundary": bd, "strength": ring["edge_strength"], "samples": []}
-        print(f"    #{i:>2}  r={r:>3}px  edge={ring['edge_strength']:>5.1f}  {bd}")
+        cs = ring.get("color_step", 0)
+        tracks[i] = {"id": i, "ref_r": r, "boundary": bd,
+                      "strength": ring["edge_strength"], "color_step": cs,
+                      "samples": []}
+        print(f"    #{i:>2}  r={r:>3}px  step={cs:>5.1f}  edge={ring['edge_strength']:>5.1f}  {bd}")
 
     # ── Pass 2: 逐帧追踪 ──
     print(f"\n  Pass 2: Tracking across {total} frames...")
@@ -350,13 +519,16 @@ def analyze_video(video_path: str, sample_every: int = 2, preview: bool = False,
     for tid, t in tracks.items():
         samps = t["samples"]
         if len(samps) < 2:
-            summaries.append({
+            entry = {
                 "ring_id": tid, "ref_radius": t["ref_r"], "boundary": t["boundary"],
-                "edge_strength": round(t["strength"], 1), "frames": len(samps),
+                "edge_strength": round(t["strength"], 1),
+                "color_step": round(t.get("color_step", 0), 1),
+                "frames": len(samps),
                 "motion": "insufficient data",
                 "radius_avg": float(t["ref_r"]), "radius_min": t["ref_r"],
                 "radius_max": t["ref_r"], "radius_change": 0, "timeline": [],
-            })
+            }
+            summaries.append(entry)
             continue
 
         radii = [s["radius"] for s in samps]
@@ -379,13 +551,15 @@ def analyze_video(video_path: str, sample_every: int = 2, preview: bool = False,
             else:
                 motion = f"jittering {r_change}px"
 
-        summaries.append({
+        entry = {
             "ring_id": tid, "ref_radius": t["ref_r"], "boundary": t["boundary"],
             "edge_strength": round(t["strength"], 1),
+            "color_step": round(t.get("color_step", 0), 1),
             "radius_avg": round(r_avg, 1), "radius_min": r_min, "radius_max": r_max,
             "radius_change": r_change, "frames": len(samps),
             "motion": motion, "timeline": radii[:200],
-        })
+        }
+        summaries.append(entry)
 
     summaries.sort(key=lambda s: s["ref_radius"])
 
@@ -395,6 +569,11 @@ def analyze_video(video_path: str, sample_every: int = 2, preview: bool = False,
                   "duration_s": round(total / fps, 2) if fps > 0 else 0},
         "hud_center": {"x": cx, "y": cy},
         "rings": summaries,
+        "_edge_profile": avg_edge, "_step_profile": step_profile,
+        "_mean_edge": avg_mean_edge, "_p75_edge": avg_p75_edge,
+        "_std_edge": avg_std_edge, "_color_var": avg_color_var,
+        "_avg_b": avg_b, "_avg_g": avg_g, "_avg_r": avg_r_ch,
+        "_max_r": max_r, "_ring_peaks": rings,
     }
 
 
@@ -408,11 +587,12 @@ def print_report(report: dict):
     print(f"  HUD center: ({c['x']}, {c['y']})")
     print(f"  Rings: {len(rings)}")
     print("=" * 80)
-    print(f"\n  {'#':>3} {'R(px)':>6} {'Range':>10} {'Edge':>5} {'Frames':>6} {'Boundary':30} {'Motion'}")
-    print(f"  " + "-" * 95)
+    print(f"\n  {'#':>3} {'R(px)':>6} {'Range':>10} {'Step':>5} {'Edge':>5} {'Frames':>6} {'Boundary':30} {'Motion'}")
+    print(f"  " + "-" * 105)
     for r in rings:
         rng = f"{r['radius_min']}-{r['radius_max']}" if r['radius_change'] > 0 else "---"
-        print(f"  {r['ring_id']:>3} {r['ref_radius']:>5} {rng:>10} {r['edge_strength']:>5.1f} {r['frames']:>6} {r['boundary']:30} {r['motion']}")
+        cs = r.get('color_step', 0)
+        print(f"  {r['ring_id']:>3} {r['ref_radius']:>5} {rng:>10} {cs:>5.1f} {r['edge_strength']:>5.1f} {r['frames']:>6} {r['boundary']:30} {r['motion']}")
 
     max_r = max((r["ref_radius"] for r in rings), default=1)
     print(f"\n  Layout (center -> out):")
@@ -420,6 +600,89 @@ def print_report(report: dict):
         bar = "=" * int(r["ref_radius"] / max_r * 50)
         ch = f" [{r['radius_min']}-{r['radius_max']}]" if r['radius_change'] > 1 else ""
         print(f"  {r['ref_radius']:>4}px {bar}| {r['motion']}{ch}")
+
+
+def save_edge_profile(report: dict):
+    """保存颜色阶跃 + 梯度曲线 + BGR 颜色条"""
+    avg_edge = report["_edge_profile"]
+    step_profile = report["_step_profile"]
+    rings = report["_ring_peaks"]
+    max_r = report["_max_r"]
+    avg_b, avg_g, avg_r_ch = report["_avg_b"], report["_avg_g"], report["_avg_r"]
+
+    graph_h = 400
+    graph_w = max_r * 4
+    margin = 50
+    total_h = graph_h + 80
+    img = np.zeros((total_h, graph_w + margin, 3), dtype=np.uint8)
+    img[:] = (30, 30, 30)
+
+    # 两个比例尺: 梯度用 edge_max, 阶跃用 step_max
+    edge_max = max(avg_edge.max(), 1)
+    step_max = max(step_profile.max(), 1)
+
+    def draw_curve(data, color, thickness=1, scale=None):
+        s = scale if scale else edge_max
+        for i in range(1, max_r):
+            x0 = margin + (i - 1) * 4
+            x1 = margin + i * 4
+            y0 = graph_h - int(data[i-1] / s * (graph_h - 20))
+            y1 = graph_h - int(data[i] / s * (graph_h - 20))
+            cv2.line(img, (x0, y0), (x1, y1), color, thickness)
+
+    # 梯度曲线 (暗色, 参考用)
+    draw_curve(avg_edge, (0, 120, 0), 1)
+
+    # ★ 颜色阶跃曲线 (亮黄, 主曲线)
+    draw_curve(step_profile, (0, 255, 255), 2, scale=step_max)
+
+    # 图例
+    cv2.putText(img, "ColorStep (primary)", (margin, 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
+    cv2.putText(img, "Gradient (ref)", (margin + 160, 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 120, 0), 1)
+
+    # 标记检测到的分界线 (基于阶跃法)
+    ring_colors = [(0,255,0),(255,100,0),(0,200,255),(255,0,200),
+                   (100,255,100),(255,255,0),(0,100,255),(200,0,255),
+                   (255,180,0),(0,255,200),(128,255,128),(255,128,0)]
+    for ring in rings:
+        r = ring["radius"]
+        x = margin + r * 4
+        y = graph_h - int(step_profile[r] / step_max * (graph_h - 20))
+        rid = ring.get("id", 0)
+        c = ring_colors[rid % len(ring_colors)]
+        cv2.circle(img, (x, y), 5, c, -1)
+        cv2.line(img, (x, graph_h), (x, y), c, 1)
+        cs = ring.get("color_step", 0)
+        label = f"#{rid} r={r} s={cs:.0f}"
+        cv2.putText(img, label, (x - 10, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, c, 1)
+
+    # 底部颜色条
+    bar_top = graph_h + 10
+    bar_h = 30
+    for i in range(max_r):
+        x = margin + i * 4
+        b, g, r = int(avg_b[i]), int(avg_g[i]), int(avg_r_ch[i])
+        cv2.rectangle(img, (x, bar_top), (x + 4, bar_top + bar_h), (b, g, r), -1)
+
+    # 标尺
+    for i in range(0, max_r, 10):
+        x = margin + i * 4
+        cv2.line(img, (x, bar_top + bar_h), (x, bar_top + bar_h + 5), (150, 150, 150), 1)
+        if i % 20 == 0:
+            cv2.putText(img, str(i), (x - 5, bar_top + bar_h + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1)
+
+    cv2.putText(img, f"step_max={step_max:.1f} edge_max={edge_max:.1f}", (2, 35),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (100, 100, 100), 1)
+
+    out_dir = Path(__file__).parent / "输出"
+    out_dir.mkdir(exist_ok=True)
+    out_path = str(out_dir / "edge_profile.png")
+    cv2.imwrite(out_path, img)
+    print(f"  Edge profile graph: {out_path}")
 
 
 def save_annotated(video_path: str, report: dict):
@@ -441,23 +704,32 @@ def save_annotated(video_path: str, report: dict):
         r = ring["ref_radius"]
         c = colors[rid % len(colors)]
         cv2.circle(frame, (cx, cy), r, c, 1)
-        ang = rid * 28 + 10
+        # 标签放在不同角度避免重叠
+        ang = rid * 35 + 10
         lx = int(cx + r * np.cos(np.radians(ang)))
         ly = int(cy + r * np.sin(np.radians(ang)))
-        cv2.putText(frame, f"#{rid} r={r}", (lx+3, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.3, c, 1)
+        label = f"#{rid} r={r}"
+        cv2.putText(frame, label, (lx + 3, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 0, 0), 2)
+        cv2.putText(frame, label, (lx + 3, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.32, c, 1)
 
     cv2.drawMarker(frame, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 8, 1)
-    cv2.imwrite("ring_analysis.png", frame)
-    print(f"\n  Annotated: ring_analysis.png")
+    out_dir = Path(__file__).parent / "输出"
+    out_dir.mkdir(exist_ok=True)
+    out_path = str(out_dir / "ring_analysis.png")
+    cv2.imwrite(out_path, frame)
+    print(f"\n  Annotated: {out_path}")
 
 
 def main():
     p = argparse.ArgumentParser(description="Concentric ring detector (color gradient + ball mask)")
     p.add_argument("video")
-    p.add_argument("--out", "-o", default="ring_analysis.json")
+    p.add_argument("--out", "-o", default=None,
+                   help="Output JSON path (default: 视频采集数据/输出/ring_analysis.json)")
     p.add_argument("--preview", "-p", action="store_true")
     p.add_argument("--sample-every", "-s", type=int, default=2)
-    p.add_argument("--min-prom", type=float, default=2.5)
+    p.add_argument("--min-prom", type=float, default=1.5)
+    p.add_argument("--min-radius", type=int, default=15)
+    p.add_argument("--max-radius", type=int, default=130)
     p.add_argument("--center", type=str, default=None, help="Manual center: X,Y")
     args = p.parse_args()
 
@@ -469,14 +741,21 @@ def main():
         parts = args.center.split(",")
         center = (int(parts[0]), int(parts[1]))
 
-    report = analyze_video(args.video, args.sample_every, args.preview, args.min_prom, center)
+    out_dir = Path(__file__).parent / "输出"
+    out_dir.mkdir(exist_ok=True)
+    out_json = args.out if args.out else str(out_dir / "ring_analysis.json")
+
+    report = analyze_video(args.video, args.sample_every, args.preview,
+                           args.min_prom, args.min_radius, args.max_radius, center)
     print_report(report)
     save_annotated(args.video, report)
+    save_edge_profile(report)
 
-    export = {k: v for k, v in report.items()}
-    with open(args.out, "w", encoding="utf-8") as f:
+    # JSON 导出 (排除内部数据)
+    export = {k: v for k, v in report.items() if not k.startswith("_")}
+    with open(out_json, "w", encoding="utf-8") as f:
         json.dump(export, f, ensure_ascii=False, indent=2)
-    print(f"  JSON: {args.out}")
+    print(f"  JSON: {out_json}")
 
 
 if __name__ == "__main__":

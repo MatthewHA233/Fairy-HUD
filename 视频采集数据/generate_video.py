@@ -1,69 +1,85 @@
 """
-生成 HUD 帧动画视频 — 复刻参考视频的颜色布局和脉动
-用法: python generate_video.py [--preview]
-输出: generated_hud.mp4
+生成 HUD 帧动画视频 — 纯数据驱动
+所有颜色、半径、脉动全部来自 ring_analysis JSON，无任何硬编码元素。
+用法: python generate_video.py [--preview] [--out OUTPUT] [--data JSON] [--fps FPS]
 """
 import cv2
 import numpy as np
 import json
 import argparse
+import re
 from pathlib import Path
 
 
-def extract_radial_profile(video_path: str, cx: int, cy: int, max_r: int,
-                           H: int, W: int, sample_every: int = 5) -> np.ndarray:
-    """从参考视频提取平均径向 BGR 颜色剖面 (bincount 向量化)"""
-    cap = cv2.VideoCapture(video_path)
-
-    ys, xs = np.mgrid[0:H, 0:W]
-    dist = np.sqrt((xs.astype(np.float64) - cx) ** 2 + (ys.astype(np.float64) - cy) ** 2)
-    dist_int = np.clip(dist.astype(int), 0, max_r - 1).ravel()
-
-    counts = np.bincount(dist_int, minlength=max_r).astype(np.float64)
-    sum_bgr = np.zeros((max_r, 3), dtype=np.float64)
-    n = 0
-    fidx = 0
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if fidx % sample_every == 0:
-            for ch in range(3):
-                flat = frame[:, :, ch].ravel().astype(np.float64)
-                sum_bgr[:, ch] += np.bincount(dist_int, weights=flat, minlength=max_r)
-            n += 1
-        fidx += 1
-
-    cap.release()
-
-    total_counts = counts * max(n, 1)
-    nz = total_counts > 0
-    for ch in range(3):
-        sum_bgr[nz, ch] /= total_counts[nz]
-
-    # 轻度平滑
-    kernel = np.array([1, 2, 4, 2, 1], dtype=np.float64)
-    kernel /= kernel.sum()
-    for ch in range(3):
-        sum_bgr[:, ch] = np.convolve(sum_bgr[:, ch], kernel, mode="same")
-
-    return sum_bgr
+def parse_boundary_colors(boundary_str: str) -> tuple:
+    """
+    解析边界颜色字符串 "name(B,G,R) -> name(B,G,R)"
+    返回 ((B_inner, G_inner, R_inner), (B_outer, G_outer, R_outer))
+    """
+    nums = re.findall(r'\((\d+),(\d+),(\d+)\)', boundary_str)
+    if len(nums) >= 2:
+        inner = tuple(float(x) for x in nums[0])  # (B, G, R)
+        outer = tuple(float(x) for x in nums[1])
+        return inner, outer
+    if len(nums) == 1:
+        c = tuple(float(x) for x in nums[0])
+        return c, c
+    return (0, 0, 0), (0, 0, 0)
 
 
-def get_radius_at_frame(ring: dict, fidx: int, sample_every: int = 2) -> float:
-    """插值获取某帧的环半径"""
+def build_color_profile(rings: list, max_r: int) -> np.ndarray:
+    """
+    从分界线颜色构建径向 BGR 颜色剖面 (max_r, 3)
+    在相邻分界线之间线性插值
+    """
+    # 收集颜色锚点: [(radius, BGR), ...]
+    stops = [(0, np.array([0, 0, 0], dtype=np.float64))]  # 中心=黑
+
+    for ring in sorted(rings, key=lambda r: r["ref_radius"]):
+        inner_bgr, outer_bgr = parse_boundary_colors(ring["boundary"])
+        r = ring["ref_radius"]
+        # 分界线内侧颜色 (r - 0.5) 和外侧颜色 (r + 0.5)
+        stops.append((max(r - 1, 0), np.array(inner_bgr, dtype=np.float64)))
+        stops.append((r + 1, np.array(outer_bgr, dtype=np.float64)))
+
+    # 末尾延伸到 max_r
+    if stops:
+        stops.append((max_r, stops[-1][1].copy()))
+
+    # 去重并排序
+    stops.sort(key=lambda s: s[0])
+
+    # 线性插值生成完整剖面
+    profile = np.zeros((max_r, 3), dtype=np.float64)
+    for ri in range(max_r):
+        # 找 ri 落在哪两个 stop 之间
+        left_idx = 0
+        for si in range(len(stops) - 1):
+            if stops[si][0] <= ri:
+                left_idx = si
+        right_idx = min(left_idx + 1, len(stops) - 1)
+
+        r_left, c_left = stops[left_idx]
+        r_right, c_right = stops[right_idx]
+
+        if r_right == r_left:
+            profile[ri] = c_left
+        else:
+            t = (ri - r_left) / (r_right - r_left)
+            t = max(0.0, min(1.0, t))
+            profile[ri] = c_left * (1 - t) + c_right * t
+
+    return profile
+
+
+def get_radius_at_frame(ring: dict, fidx: int) -> float:
+    """直接取帧对应的环半径"""
     tl = ring["timeline"]
     if not tl:
         return float(ring["ref_radius"])
-    t = fidx / sample_every
-    i = int(t)
-    frac = t - i
-    if i >= len(tl) - 1:
+    if fidx >= len(tl):
         return float(tl[-1])
-    if i < 0:
-        return float(tl[0])
-    return tl[i] * (1.0 - frac) + tl[i + 1] * frac
+    return float(tl[fidx])
 
 
 def build_warp(ref_radii: list, cur_radii: list, max_r: int) -> np.ndarray:
@@ -95,130 +111,130 @@ def render_frame(dist_flat: np.ndarray, profile: np.ndarray,
     return frame.reshape(H, W, 3)
 
 
-def add_gyro_gradient(frame: np.ndarray, theta_map: np.ndarray,
-                      dist_map: np.ndarray, gyro_angle: float) -> np.ndarray:
-    """陀螺仪: 在环区域添加旋转角度亮度梯度"""
-    diff = theta_map - gyro_angle
-    grad = 0.5 + 0.5 * np.cos(diff)  # 0..1
-
-    # 只影响 r=55..100 的环区域 (白环外侧到薄环)
-    r_mask = (dist_map > 55) & (dist_map < 100)
-    factor = np.ones_like(dist_map, dtype=np.float32)
-    factor[r_mask] = 0.80 + 0.20 * grad[r_mask]
-
-    result = frame.astype(np.float32)
-    for ch in range(3):
-        result[:, :, ch] *= factor
-    return np.clip(result, 0, 255).astype(np.uint8)
-
-
-def add_glow(frame: np.ndarray, strength: float = 0.4) -> np.ndarray:
-    """辉光 bloom 效果"""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, bright = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-    mask3 = cv2.merge([bright, bright, bright]).astype(np.float32) / 255.0
-
-    glow = cv2.GaussianBlur(frame, (0, 0), sigmaX=20, sigmaY=20)
-    glow = (glow.astype(np.float32) * mask3).astype(np.uint8)
-
-    return cv2.addWeighted(frame, 1.0, glow, strength, 0)
-
-
-def add_ball(frame: np.ndarray, cx: int, cy: int, angle: float,
-             radius: float = 43) -> np.ndarray:
-    """白色小球 + 辉光"""
-    bx = int(cx + radius * np.cos(angle))
-    by = int(cy + radius * np.sin(angle))
-
-    # 外层辉光
-    overlay = frame.copy()
-    cv2.circle(overlay, (bx, by), 11, (170, 170, 200), -1)
-    frame = cv2.addWeighted(frame, 0.8, overlay, 0.2, 0)
-
-    # 内核
-    cv2.circle(frame, (bx, by), 4, (255, 255, 255), -1)
-    return frame
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Generate HUD animation video")
+    parser = argparse.ArgumentParser(description="Generate HUD animation video (data-driven)")
     parser.add_argument("--preview", "-p", action="store_true")
-    parser.add_argument("--out", "-o", default="generated_hud.mp4")
+    default_out = str(Path(__file__).parent / "输出" / "generated_hud.mp4")
+    default_data = str(Path(__file__).parent / "输出" / "ring_analysis.json")
+    parser.add_argument("--out", "-o", default=default_out)
+    parser.add_argument("--data", "-d", default=default_data,
+                        help="Ring analysis JSON file")
+    parser.add_argument("--fps", type=float, default=None,
+                        help="Override output FPS (default: use source fps)")
+    parser.add_argument("--width", type=int, default=None,
+                        help="Override output width (default: use source)")
+    parser.add_argument("--height", type=int, default=None,
+                        help="Override output height (default: use source)")
     args = parser.parse_args()
 
-    with open("ring_analysis.json", encoding="utf-8") as f:
+    with open(args.data, encoding="utf-8") as f:
         data = json.load(f)
 
     cx = data["hud_center"]["x"]
     cy = data["hud_center"]["y"]
     rings = data["rings"]
-    W = data["video"]["width"]
-    H = data["video"]["height"]
-    fps = data["video"]["fps"]
+    src_fps = data["video"]["fps"]
     total = data["video"]["total_frames"]
-    max_r = min(W, H) // 2
+    src_w = data["video"]["width"]
+    src_h = data["video"]["height"]
 
-    ref_radii = [float(r["ref_radius"]) for r in rings]
-    video_path = "public/参考视频.mp4"
+    # 输出尺寸和帧率
+    out_fps = args.fps if args.fps else src_fps
+    out_w = args.width if args.width else src_w
+    out_h = args.height if args.height else src_h
 
-    # ── Step 1: 提取颜色剖面 ──
-    print("Step 1: Extracting radial color profile from reference...")
-    profile = extract_radial_profile(video_path, cx, cy, max_r, H, W, sample_every=5)
-    print(f"  Done. Profile shape: {profile.shape}")
+    # 如果输出尺寸和源不同, 按比例缩放中心和半径
+    scale_x = out_w / src_w
+    scale_y = out_h / src_h
+    out_cx = int(cx * scale_x)
+    out_cy = int(cy * scale_y)
+    scale_r = min(scale_x, scale_y)  # 半径用较小的缩放
 
-    # ── Step 2: 预计算 ──
-    print("Step 2: Precomputing maps...")
-    ys, xs = np.mgrid[0:H, 0:W]
-    dist_map = np.sqrt((xs.astype(np.float64) - cx) ** 2 +
-                       (ys.astype(np.float64) - cy) ** 2)
+    max_r = min(out_w, out_h) // 2
+
+    print(f"Source: {src_w}x{src_h} @ {src_fps}fps, {total} frames")
+    print(f"Output: {out_w}x{out_h} @ {out_fps}fps, center=({out_cx},{out_cy})")
+    print(f"  Scale: {scale_r:.2f}x, max_r: {max_r}")
+    print(f"  Rings: {len(rings)}")
+
+    # ── Step 1: 从 JSON 颜色数据构建径向颜色剖面 ──
+    print("\nStep 1: Building radial color profile from JSON boundary colors...")
+
+    # 缩放 ring 半径
+    scaled_rings = []
+    for r in rings:
+        sr = dict(r)
+        sr["ref_radius"] = round(r["ref_radius"] * scale_r)
+        sr["timeline"] = [round(v * scale_r) for v in r.get("timeline", [])]
+        scaled_rings.append(sr)
+
+    profile = build_color_profile(scaled_rings, max_r)
+    print(f"  Profile shape: {profile.shape}")
+
+    # ref_radii 用于 warp
+    ref_radii = [float(r["ref_radius"]) for r in scaled_rings]
+
+    # ── Step 2: 预计算距离图 ──
+    print("Step 2: Precomputing distance map...")
+    ys, xs = np.mgrid[0:out_h, 0:out_w]
+    dist_map = np.sqrt((xs.astype(np.float64) - out_cx) ** 2 +
+                       (ys.astype(np.float64) - out_cy) ** 2)
     dist_flat = dist_map.ravel()
-    theta_map = np.arctan2(ys.astype(np.float64) - cy,
-                           xs.astype(np.float64) - cx).astype(np.float32)
 
     # ── Step 3: 逐帧渲染 ──
-    print(f"Step 3: Rendering {total} frames @ {fps}fps...")
+    # 如果输出帧率和源不同, 需要插值 timeline
+    if out_fps != src_fps:
+        out_total = int(total * out_fps / src_fps)
+    else:
+        out_total = total
+
+    print(f"Step 3: Rendering {out_total} frames @ {out_fps}fps...")
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(args.out, fourcc, fps, (W, H))
+    out = cv2.VideoWriter(args.out, fourcc, out_fps, (out_w, out_h))
 
-    for fidx in range(total):
-        t = fidx / fps
+    for fidx in range(out_total):
+        # 源帧索引 (用于 timeline 查询)
+        src_fidx = fidx * src_fps / out_fps if out_fps != src_fps else fidx
+        src_i = int(src_fidx)
+        src_frac = src_fidx - src_i
 
-        # 3a. 当前环半径
-        cur_radii = [get_radius_at_frame(r, fidx) for r in rings]
+        # 当前环半径 (支持插值)
+        cur_radii = []
+        for r in scaled_rings:
+            tl = r["timeline"]
+            if not tl:
+                cur_radii.append(float(r["ref_radius"]))
+            elif src_i >= len(tl) - 1:
+                cur_radii.append(float(tl[-1]))
+            else:
+                v = tl[src_i] * (1.0 - src_frac) + tl[src_i + 1] * src_frac
+                cur_radii.append(v)
 
-        # 3b. 径向变换
+        # 径向变换
         warp = build_warp(ref_radii, cur_radii, max_r)
 
-        # 3c. 基础渲染
-        frame = render_frame(dist_flat, profile, warp, max_r, (H, W))
-
-        # 3d. 陀螺仪旋转梯度 (~0.5°/frame = 30°/s)
-        gyro_angle = t * np.radians(30)
-        frame = add_gyro_gradient(frame, theta_map, dist_map, gyro_angle)
-
-        # 3e. 辉光
-        frame = add_glow(frame, 0.35)
-
-        # 3f. 小球 (135° 附近摆动 ±18°)
-        ball_angle = np.radians(135) + np.sin(t * 1.2) * np.radians(18)
-        frame = add_ball(frame, cx, cy, ball_angle, radius=43)
+        # 渲染
+        frame = render_frame(dist_flat, profile, warp, max_r, (out_h, out_w))
 
         out.write(frame)
 
         if args.preview:
-            cv2.imshow("Generated HUD [q=quit]", frame)
+            show = frame
+            if out_w > 800:
+                show = cv2.resize(frame, (out_w // 2, out_h // 2))
+            cv2.imshow("Generated HUD [q=quit]", show)
             if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):
                 break
 
-        if fidx % 60 == 0:
-            print(f"  frame {fidx}/{total}")
+        if fidx % max(1, int(out_fps)) == 0:
+            print(f"  frame {fidx}/{out_total}")
 
     out.release()
     if args.preview:
         cv2.destroyAllWindows()
 
     print(f"\nDone! Output: {args.out}")
-    print(f"  {W}x{H} @ {fps}fps, {total} frames ({total / fps:.1f}s)")
+    print(f"  {out_w}x{out_h} @ {out_fps}fps, {out_total} frames ({out_total/out_fps:.1f}s)")
 
 
 if __name__ == "__main__":
