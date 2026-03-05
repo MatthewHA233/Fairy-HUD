@@ -84,8 +84,8 @@ const styles = `
 
   .layer-bg-disc {
     position: absolute;
-    width: 376px;
-    height: 376px;
+    width: 380px;
+    height: 380px;
     background: rgb(11, 46, 104);
     border-radius: 50%;
     z-index: 5;
@@ -105,18 +105,17 @@ const styles = `
   }
 
   .layer-gyro-wrapper {
-    width: 340px;
-    height: 340px;
+    width: 380px;
+    height: 380px;
     z-index: 20;
     filter: drop-shadow(0 0 8px rgba(10, 50, 150, 0.4));
   }
 
   .layer-thick-white {
-    width: 238px;
-    height: 238px;
-    border: 64px solid #ffffff;
+    width: 254px;
+    height: 254px;
+    background: #ffffff;
     border-radius: 50%;
-    box-sizing: border-box;
     box-shadow:
       0 0  4px  1px rgba(255, 255, 255, 0.80),
       0 0 12px  4px rgba(160, 210, 255, 0.50),
@@ -125,18 +124,40 @@ const styles = `
   }
 
   .layer-inner-blue {
-    width: 130px;
-    height: 130px;
-    border: 24px solid rgb(166, 182, 219);
+    width: 190px;
+    height: 190px;
+    background: rgb(166, 182, 219);
     border-radius: 50%;
-    box-sizing: border-box;
-    box-shadow: none;
+    z-index: 35;
+  }
+
+  .layer-boundary-line {
+    width: 148px;
+    height: 148px;
+    background: rgb(182, 216, 242);
+    border-radius: 50%;
+    z-index: 37;
+  }
+
+  .layer-iris {
+    width: 140px;
+    height: 140px;
+    background: rgb(12, 97, 162);
+    border-radius: 50%;
     z-index: 40;
   }
 
+  .layer-white-outline {
+    width: 104px;
+    height: 104px;
+    background: rgb(160, 185, 220);
+    border-radius: 50%;
+    z-index: 43;
+  }
+
   .layer-void {
-    width: 56px;
-    height: 56px;
+    width: 100px;
+    height: 100px;
     background: rgb(6, 53, 120);
     border-radius: 50%;
     box-shadow: inset 0 0 20px #000;
@@ -147,8 +168,8 @@ const styles = `
     border-radius: 50%;
     border-style: solid;
   }
-  .pupil-1 { width: 90px; height: 90px; border-width: 1px; border-color: rgba(100, 180, 255, 0.15); }
-  .pupil-2 { width: 50px; height: 50px; border-width: 2px; border-color: rgba(100, 180, 255, 0.25); }
+  .pupil-1 { width: 130px; height: 130px; border-width: 1px; border-color: rgba(100, 180, 255, 0.15); }
+  .pupil-2 { width: 90px; height: 90px; border-width: 2px; border-color: rgba(100, 180, 255, 0.25); }
 
   .layer-ball-rotator {
     width: 0;
@@ -156,8 +177,8 @@ const styles = `
     z-index: 60;
   }
   .ball {
-    width: 46px;
-    height: 46px;
+    width: 62px;
+    height: 62px;
     background: #ffffff;
     border-radius: 50%;
     transform: translate(-50%, -50%) translateY(-50px);
@@ -182,6 +203,9 @@ export default function App() {
   const thinRingRef = useRef<HTMLDivElement>(null);
   const innerBlueRef = useRef<HTMLDivElement>(null);
   const voidRef = useRef<HTMLDivElement>(null);
+  const irisRef = useRef<HTMLDivElement>(null);
+  const boundaryLineRef = useRef<HTMLDivElement>(null);
+  const whiteOutlineRef = useRef<HTMLDivElement>(null);
   const bgDiscRef = useRef<HTMLDivElement>(null);
   const pupilRingsRef = useRef<(HTMLDivElement | null)[]>([]);
 
@@ -199,16 +223,8 @@ export default function App() {
     gyroSpeed: 0.3,
     targetGyroSpeed: 0.3,
 
-    // Audio
-    audioSmooth: 0,
-    audioPeak: 0,
-    prevRawVol: 0,
-
-    // Ripple ring-buffer: time-based, each fires at full intensity
-    ripples: [] as { time: number; intensity: number }[],
-
-    // Ball spring physics
-    ballAngle: 135,
+    // Ball organic float
+    ballAngle: 142,
     ballVelocity: 0,
 
     // Per-state base values (lerped)
@@ -221,43 +237,39 @@ export default function App() {
     thinBright: 0,
     targetThinBright: 0,
 
-    // Phase accumulators
-    breathPhase: 0,
-    thinkPhase: 0,
+    // Audio analysis
+    audioSmooth: 0,
+    audioPeak: 0,
+    prevRawVol: 0,
 
-    // Breath intensity: idle=0, listening/speaking=1, thinking=0.4
-    breathMix: 0,
-    targetBreathMix: 0,
+    // Audio-triggered ripples (listening/speaking)
+    ripples: [] as { time: number; intensity: number }[],
+    lastRippleTime: 0,
   });
 
   // ═══════════════════════════════════════
   //  MAIN ANIMATION LOOP
   // ═══════════════════════════════════════
   useEffect(() => {
+    // ── Water Droplet Ripple Wave ──
+    // Three-phase waveform: contract → expand → damped rebound
+    // All segments join at zero crossings (no discontinuities)
+    const dropletWave = (age: number, delay: number): number => {
+      const t = (age - delay) / 1000; // convert ms → seconds
+      if (t < 0) return 0;                                                    // wave hasn't arrived
+      if (t < 0.12) return -Math.sin(Math.PI * t / 0.12) * 0.35;            // contract: quick dip
+      if (t < 0.37) return  Math.sin(Math.PI * (t - 0.12) / 0.25);          // expand: full swell
+      if (t < 0.87) {                                                         // rebound: damped oscillation
+        const dt = t - 0.37;
+        return -Math.sin(2 * Math.PI * 1.5 * dt) * Math.exp(-6 * dt) * 0.25;
+      }
+      return 0;                                                               // rest
+    };
+
     const loop = () => {
       const s = stateRef.current;
       const now = Date.now();
-
-      // ── Phases ──
-      s.breathPhase += 0.015;
-      if (hudState === 'thinking') s.thinkPhase += 0.04;
-
-      // ── Off-center drift (organic non-perfect centering) ──
-      const driftX = Math.sin(now / 3000) * 1.5 + Math.sin(now / 1700) * 0.5;
-      const driftY = Math.cos(now / 2500) * 1.2 + Math.cos(now / 1900) * 0.4;
-
-      // ── Continuous Ring Breathing (per-ring frequency from video analysis) ──
-      // Each ring: single sine at its measured frequency. No dual-harmonic beating.
-      // void ~0.5Hz, inner ~1.6Hz, white ~1.2Hz, thin ~0.9Hz
       const tSec = now / 1000;
-      const bm = s.breathMix;
-      const TAU = Math.PI * 2;
-      const breathVoid  = Math.sin(tSec * TAU * 0.5)  * 0.04  * bm;
-      const breathInner = Math.sin(tSec * TAU * 1.6)  * 0.055 * bm;
-      const breathWhite = Math.sin(tSec * TAU * 1.2)  * 0.045 * bm;
-      const breathThin  = Math.sin(tSec * TAU * 0.9)  * 0.03  * bm;
-      const breathRing  = Math.sin(tSec * TAU * 0.5)  * 0.015 * bm;
-      const breathHalo  = Math.sin(tSec * TAU * 0.3)  * 0.01  * bm;
 
       // ══ 1. STATE TARGETS ══
       switch (hudState) {
@@ -267,15 +279,13 @@ export default function App() {
           s.targetHalo2Base = 0.7;
           s.targetRingBase = 0.75;
           s.targetThinBright = 0;
-          s.targetBreathMix = 0.15;
           break;
         case 'listening':
-          s.targetGyroSpeed = 0.6;
+          s.targetGyroSpeed = -0.6;
           s.targetGlowBase = 0.80;
           s.targetHalo2Base = 0.75;
           s.targetRingBase = 0.85;
           s.targetThinBright = 0.4;
-          s.targetBreathMix = 1.0;
           break;
         case 'thinking':
           s.targetGyroSpeed = 4.5;
@@ -283,7 +293,6 @@ export default function App() {
           s.targetHalo2Base = 0.85;
           s.targetRingBase = 0.90;
           s.targetThinBright = 1.0;
-          s.targetBreathMix = 0.4;
           break;
         case 'speaking':
           s.targetGyroSpeed = 1.2;
@@ -291,7 +300,6 @@ export default function App() {
           s.targetHalo2Base = 0.80;
           s.targetRingBase = 0.85;
           s.targetThinBright = 0.5;
-          s.targetBreathMix = 1.0;
           break;
       }
 
@@ -302,9 +310,8 @@ export default function App() {
       s.halo2Base += (s.targetHalo2Base - s.halo2Base) * lr;
       s.ringBase += (s.targetRingBase - s.ringBase) * lr;
       s.thinBright += (s.targetThinBright - s.thinBright) * lr;
-      s.breathMix += (s.targetBreathMix - s.breathMix) * lr;
 
-      // ══ 3. AUDIO → PEAK → RIPPLE TRIGGER ══
+      // ══ 3. AUDIO ANALYSIS + ONSET DETECTION ══
       let rawVol = 0;
       if ((hudState === 'listening' || hudState === 'speaking') && analyserRef.current) {
         const data = new Uint8Array(analyserRef.current.frequencyBinCount);
@@ -314,198 +321,215 @@ export default function App() {
         rawVol = sum / data.length / 255;
       }
       s.audioSmooth += (rawVol - s.audioSmooth) * 0.25;
-      if (rawVol > s.audioPeak) {
-        s.audioPeak += (rawVol - s.audioPeak) * 0.6;
-      } else {
-        s.audioPeak += (rawVol - s.audioPeak) * 0.05;
-      }
-
-      // Onset detection: trigger ripple on rising edge
-      let rippleTrigger = 0;
-      if (rawVol > 0.08 && rawVol > s.prevRawVol * 1.15 + 0.015) {
-        rippleTrigger = Math.min(rawVol * 2.5, 1.0);
-      }
+      // audioPeak: fast attack, slow decay
+      if (rawVol > s.audioPeak) s.audioPeak += (rawVol - s.audioPeak) * 0.6;
+      else s.audioPeak *= 0.95;
+      // onset detection
+      const onset = rawVol > 0.08 && rawVol > s.prevRawVol * 1.15 + 0.015;
       s.prevRawVol = rawVol;
 
-      // Thinking: synthetic ripple pulses
-      if (hudState === 'thinking') {
-        const t1 = Math.sin(s.thinkPhase * 3.7);
-        const t2 = Math.sin(s.thinkPhase * 5.3);
-        if (t1 + t2 > 1.3) {
-          rippleTrigger = Math.max(rippleTrigger, 0.5 + Math.sin(s.thinkPhase * 11) * 0.3);
+      // ══ 3b. RIPPLE TRIGGERING ══
+      if (hudState === 'listening' && onset && now - s.lastRippleTime > 180) {
+        s.ripples.push({ time: now, intensity: Math.min(rawVol * 3.5, 1) });
+        s.lastRippleTime = now;
+      }
+      if (hudState === 'speaking' && onset && now - s.lastRippleTime > 120) {
+        s.ripples.push({ time: now, intensity: Math.min(rawVol * 4.5, 1) });
+        s.lastRippleTime = now;
+      }
+      // Silent fallback: inject weak synthetic ripple after 2s silence
+      if ((hudState === 'listening' || hudState === 'speaking') && now - s.lastRippleTime > 2000) {
+        s.ripples.push({ time: now, intensity: 0.5 });
+        s.lastRippleTime = now;
+      }
+      // Expire old ripples (>1300ms)
+      s.ripples = s.ripples.filter(r => now - r.time < 1300);
+
+      // ══ 4. WATER DROPLET RIPPLE (state-differentiated) ══
+      const stateMul = hudState === 'listening' ? 2.0 : hudState === 'speaking' ? 3.0 : 1.0;
+
+      const computeWave = (delay: number, amp: number): number => {
+        if (hudState === 'idle' || hudState === 'thinking') {
+          return dropletWave(now % 2500, delay) * amp;
         }
-      }
-
-      // ══ 4. RIPPLE SYSTEM (time-delayed envelopes) ══
-      // Fire new ripple with cooldown
-      const lastRipTime = s.ripples.length > 0 ? s.ripples[s.ripples.length - 1].time : 0;
-      if (rippleTrigger > 0.15 && now - lastRipTime > 80) {
-        s.ripples.push({ time: now, intensity: rippleTrigger });
-      }
-      // Expire old ripples
-      s.ripples = s.ripples.filter(r => now - r.time < 600);
-
-      // Envelope: fast attack, quadratic decay. Each layer has a delay (ms) and duration (ms).
-      const envelope = (delay: number, duration: number): number => {
+        // listening / speaking: sum of audio-triggered ripples
         let total = 0;
         for (const rip of s.ripples) {
-          const age = now - rip.time - delay;
-          if (age < 0 || age > duration) continue;
-          const t = age / duration;
-          const env = t < 0.1 ? t / 0.1 : (1 - (t - 0.1) / 0.9) ** 2;
-          total += env * rip.intensity;
+          total += dropletWave(now - rip.time, delay) * rip.intensity;
         }
-        return Math.min(total, 1.5);
+        return total * amp * stateMul;
       };
 
-      //                      delay  duration
-      const rVoid   = envelope(  0,   200);
-      const rInner  = envelope( 40,   250);
-      const rWhite  = envelope( 80,   300);
-      const rPupil  = envelope(100,   300);
-      const rThin   = envelope(140,   350);
-      const rRing   = envelope(180,   400);
-      const rHalo   = envelope(230,   450);
+      //                                        delay(ms)  amplitude
+      const wVoid      = computeWave(   0, 0.08);
+      const wIris      = computeWave(  50, 0.07);   // iris + boundary-line + white-outline
+      const wInnerBlue = computeWave( 100, 0.055);
+      const wThickWht  = computeWave( 170, 0.045);
+      const wPupil1    = computeWave(  80, 0.06);
+      const wPupil2    = computeWave(  60, 0.065);
+      const wThinRing  = computeWave( 260, 0.03);   // thin-ring + bg-disc
+      const wGlowRing  = computeWave( 320, 0.02);
+      const wGlowHalo  = computeWave( 380, 0.015);
 
-      // ══ 5. BALL — organic float around 135° ══
-      // Three incommensurate frequencies → smooth, non-repeating wander
+      // ══ 5. BALL — organic float around 142° ══
       const ballDrift = Math.sin(tSec * 0.3)  * 4
                       + Math.sin(tSec * 0.47) * 2.5
                       + Math.sin(tSec * 0.71) * 1.5;
-      let ballExtra = 0;
+      s.ballAngle = 142 + ballDrift;
+
+      // ══ 5b. THINKING EYE DRIFT ══
+      let eyeX = 0, eyeY = 0;
       if (hudState === 'thinking') {
-        ballExtra = Math.sin(s.thinkPhase * 0.7) * 3;
-      } else if (hudState === 'speaking' || hudState === 'listening') {
-        ballExtra = s.audioPeak * 5 * Math.sin(tSec * 0.8);
+        eyeX = Math.sin(tSec * 0.7) * 6 + Math.sin(tSec * 1.1) * 3;
+        eyeY = Math.cos(tSec * 0.5) * 5 + Math.cos(tSec * 0.9) * 2;
       }
-      s.ballAngle = 135 + ballDrift + ballExtra;
 
       // ══ 6. GYROSCOPE ══
-      const gyroMod = hudState === 'speaking' ? s.audioPeak * 1.5 : 0;
-      s.gyroAngle = (s.gyroAngle + s.gyroSpeed + gyroMod) % 360;
+      let effectiveGyroSpeed = s.gyroSpeed;
+      if (hudState === 'speaking') effectiveGyroSpeed += s.audioPeak * 1.5;
+      s.gyroAngle = (s.gyroAngle + effectiveGyroSpeed) % 360;
       if (gyroRef.current) {
         gyroRef.current.style.transform = `translate(-50%, -50%) rotate(${s.gyroAngle}deg)`;
       }
 
       // ══ 7. APPLY TO ELEMENTS ══
 
-      // ── Ball: angle + counter-rotate to keep face locked ──
+      // ── Ball: angle + counter-rotate + ripple scale ──
       if (ballRotatorRef.current) {
-        ballRotatorRef.current.style.transform = `translate(-50%, -50%) rotate(${s.ballAngle}deg)`;
+        ballRotatorRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) rotate(${s.ballAngle}deg)`;
       }
       if (ballRef.current) {
-        let bScale = 1.0;
-        let bGlow = '0 0 15px rgba(255,255,255,0.9), 0 0 35px rgba(50,150,255,0.8)';
-        switch (hudState) {
-          case 'idle':
-            bScale = 0.97 + Math.sin(s.breathPhase * 0.5) * 0.03;
-            break;
-          case 'listening':
-            bScale = 1.0 + s.audioPeak * 0.15 - rVoid * 0.12;
-            bGlow = `0 0 ${15 + s.audioPeak * 30}px rgba(255,255,255,0.95), 0 0 ${35 + s.audioPeak * 50}px rgba(50,180,255,${0.8 + s.audioPeak * 0.2})`;
-            break;
-          case 'thinking': {
-            const tp = Math.sin(s.thinkPhase * 1.5) * 0.5 + 0.5;
-            bScale = 1.0 + tp * 0.06 - rVoid * 0.15;
-            bGlow = `0 0 ${15 + tp * 20 + rVoid * 30}px rgba(255,255,255,1), 0 0 ${40 + tp * 30 + rVoid * 40}px rgba(50,180,255,0.9)`;
-            break;
-          }
-          case 'speaking': {
-            // Collapse on ripple, expand on audio peak
-            bScale = 1.0 - rVoid * 0.2 + s.audioPeak * 0.25;
-            const p = s.audioPeak;
-            bGlow = `0 0 ${15 + p * 55 + rVoid * 25}px rgba(255,255,255,1), 0 0 ${35 + p * 90 + rVoid * 40}px rgba(50,180,255,${0.8 + p * 0.2})`;
-            break;
-          }
-        }
+        let bScale = 1.0 + wVoid; // ball follows void's wave
+        if (hudState === 'listening') bScale += s.audioPeak * 0.08;
+        else if (hudState === 'speaking') bScale += s.audioPeak * 0.15;
         const counterAngle = -(s.ballAngle);
         ballRef.current.style.transform = `translate(-50%, -50%) translateY(-50px) scale(${bScale}) rotate(${counterAngle}deg)`;
-        ballRef.current.style.boxShadow = bGlow;
+        // State-differentiated ball glow
+        if (hudState === 'listening') {
+          const spread = Math.round(35 + s.audioPeak * 20);
+          ballRef.current.style.boxShadow = `0 0 15px rgba(255,255,255,0.9), 0 0 ${spread}px rgba(50,150,255,0.8)`;
+        } else if (hudState === 'speaking') {
+          const spread = Math.round(35 + s.audioPeak * 40);
+          const brightness = (0.8 + s.audioPeak * 0.2).toFixed(2);
+          ballRef.current.style.boxShadow = `0 0 15px rgba(255,255,255,0.9), 0 0 ${spread}px rgba(50,150,255,${brightness})`;
+        } else {
+          ballRef.current.style.boxShadow = '0 0 15px rgba(255,255,255,0.9), 0 0 35px rgba(50,150,255,0.8)';
+        }
       }
 
-      // ── Void: breathe + COLLAPSE on ripple + drift ──
+      // ── Void ──
       if (voidRef.current) {
-        const vScale = 1.0 + breathVoid - rVoid * 0.20;
-        voidRef.current.style.transform = `translate(calc(-50% + ${driftX.toFixed(1)}px), calc(-50% + ${driftY.toFixed(1)}px)) scale(${vScale.toFixed(3)})`;
+        const vScale = 1.0 + wVoid;
+        voidRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) scale(${vScale.toFixed(4)})`;
       }
 
-      // ── Inner blue: breathe + EXPAND on ripple + drift ──
+      // ── Iris + boundary-line + white-outline: shared transform ──
+      if (irisRef.current) {
+        const irScale = 1.0 + wIris;
+        const irisTransform = `translate(-50%, -50%) translate(${eyeX * 0.9}px, ${eyeY * 0.9}px) scale(${irScale.toFixed(4)})`;
+        irisRef.current.style.transform = irisTransform;
+        if (boundaryLineRef.current) boundaryLineRef.current.style.transform = irisTransform;
+        if (whiteOutlineRef.current) whiteOutlineRef.current.style.transform = irisTransform;
+      }
+
+      // ── Inner blue ──
       if (innerBlueRef.current) {
-        const iScale = 1.0 + breathInner + rInner * 0.14;
-        const dx2 = driftX * 0.7;
-        const dy2 = driftY * 0.7;
-        innerBlueRef.current.style.transform = `translate(calc(-50% + ${dx2.toFixed(1)}px), calc(-50% + ${dy2.toFixed(1)}px)) scale(${iScale.toFixed(3)})`;
+        const iScale = 1.0 + wInnerBlue;
+        innerBlueRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.7}px, ${eyeY * 0.7}px) scale(${iScale.toFixed(4)})`;
       }
 
-      // ── Background disc: color FLASH on ripple ──
-      if (bgDiscRef.current) {
-        const f = rInner;
-        bgDiscRef.current.style.background = `rgb(${Math.round(11 + f * 30)},${Math.round(46 + f * 35)},${Math.round(104 + f * 50)})`;
-      }
-
-      // ── White ring: breathe + EXPAND + glow FLARE on ripple ──
+      // ── Thick white ring ──
       if (thickRingRef.current) {
-        const wScale = 1.0 + breathWhite + rWhite * 0.09;
-        const whGlow = `0 0 ${4 + rWhite * 70}px ${1 + rWhite * 8}px rgba(255,255,255,${(0.8 + rWhite * 0.2).toFixed(2)}), 0 0 ${12 + rWhite * 60}px ${4 + rWhite * 12}px rgba(160,210,255,${(0.5 + rWhite * 0.45).toFixed(2)}), 0 0 ${25 + rWhite * 50}px ${8 + rWhite * 10}px rgba(50,130,210,${(0.18 + rWhite * 0.5).toFixed(2)})`;
-        thickRingRef.current.style.boxShadow = whGlow;
-        thickRingRef.current.style.transform = `translate(-50%, -50%) scale(${wScale.toFixed(4)})`;
+        const wScale = 1.0 + wThickWht;
+        thickRingRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.5}px, ${eyeY * 0.5}px) scale(${wScale.toFixed(4)})`;
+        // State-differentiated white ring glow
+        if (hudState === 'speaking') {
+          const wavePeak = Math.min(Math.abs(wThickWht) / 0.045, 1);
+          const spread = Math.round(8 + wavePeak * 20);
+          const alpha = (0.18 + wavePeak * 0.4).toFixed(2);
+          thickRingRef.current.style.boxShadow = `0 0 4px 1px rgba(255,255,255,0.8), 0 0 12px 4px rgba(160,210,255,0.5), 0 0 ${spread}px ${Math.round(spread / 2)}px rgba(50,130,210,${alpha})`;
+        } else if (hudState === 'listening') {
+          const boost = s.audioPeak * 0.15;
+          thickRingRef.current.style.boxShadow = `0 0 4px 1px rgba(255,255,255,${(0.8 + boost).toFixed(2)}), 0 0 12px 4px rgba(160,210,255,${(0.5 + boost).toFixed(2)}), 0 0 25px 8px rgba(50,130,210,0.18)`;
+        } else {
+          thickRingRef.current.style.boxShadow = '0 0 4px 1px rgba(255,255,255,0.8), 0 0 12px 4px rgba(160,210,255,0.5), 0 0 25px 8px rgba(50,130,210,0.18)';
+        }
       }
 
-      // ── Pupil rings: EXPAND on ripple ──
+      // ── Pupil rings ──
       pupilRingsRef.current.forEach((ring, i) => {
         if (!ring) return;
-        let pScale = 1.0;
-        if (hudState === 'thinking') {
-          const pulse = Math.sin(s.thinkPhase * 2 + i * 0.8);
-          pScale = 1.0 + breathWhite * 0.6 + pulse * 0.08 + rPupil * (0.30 - i * 0.10);
-        } else {
-          pScale = 1.0 + breathWhite * 0.5 + rPupil * (0.35 - i * 0.12) + s.audioPeak * (0.06 * (2 - i));
-        }
-        ring.style.transform = `translate(-50%, -50%) scale(${pScale.toFixed(3)})`;
+        const pWave = i === 0 ? wPupil1 : wPupil2;
+        const pScale = 1.0 + pWave;
+        ring.style.transform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) scale(${pScale.toFixed(4)})`;
       });
 
-      // ── Thin ring: breathe + EXPAND + border flash + glow flash ──
+      // ── Thin ring + bg-disc: shared wave ──
       if (thinRingRef.current) {
-        const tScale = 1.0 + breathThin + rThin * 0.06;
-        const bright = Math.min(1, s.thinBright + rThin * 0.8);
+        const tScale = 1.0 + wThinRing;
+        let bright = s.thinBright;
+        // listening/speaking: wave-driven brightness boost
+        if (hudState === 'listening' || hudState === 'speaking') {
+          bright += Math.min(Math.abs(wThinRing / 0.03), 1) * 0.6;
+        }
+        bright = Math.min(bright, 1);
         const cr = Math.round(0x3d + (0x7a - 0x3d) * bright);
         const cg = Math.round(0x78 + (0xb8 - 0x78) * bright);
         const cb = Math.round(0xb9 + (0xe8 - 0xb9) * bright);
         thinRingRef.current.style.borderColor = `rgb(${cr},${cg},${cb})`;
-        thinRingRef.current.style.boxShadow = `inset 0 0 10px rgba(0,0,0,0.5), 0 0 ${3 + rThin * 20}px ${1 + rThin * 4}px rgba(200,230,255,1), 0 0 ${8 + rThin * 25}px ${3 + rThin * 7}px rgba(120,190,255,0.85), 0 0 ${18 + rThin * 30}px ${6 + rThin * 10}px rgba(50,130,210,0.4)`;
         thinRingRef.current.style.transform = `translate(-50%, -50%) scale(${tScale.toFixed(4)})`;
+        // speaking: extra glow expansion
+        if (hudState === 'speaking') {
+          const glowAlpha = (0.4 + Math.min(Math.abs(wThinRing / 0.03), 1) * 0.4).toFixed(2);
+          thinRingRef.current.style.boxShadow = `inset 0 0 10px rgba(0,0,0,0.5), 0 0 3px 1px rgba(200,230,255,1), 0 0 8px 3px rgba(120,190,255,0.85), 0 0 18px 6px rgba(50,130,210,${glowAlpha})`;
+        } else {
+          thinRingRef.current.style.boxShadow = 'inset 0 0 10px rgba(0,0,0,0.5), 0 0 3px 1px rgba(200,230,255,1), 0 0 8px 3px rgba(120,190,255,0.85), 0 0 18px 6px rgba(50,130,210,0.40)';
+        }
+      }
+      if (bgDiscRef.current) {
+        const bgScale = 1.0 + wThinRing;
+        bgDiscRef.current.style.transform = `translate(-50%, -50%) scale(${bgScale.toFixed(4)})`;
+        // speaking: color shift (RGB lighten)
+        if (hudState === 'speaking') {
+          const wave01 = Math.max(0, Math.min(wThinRing / 0.03, 1));
+          const r = Math.round(11 + wave01 * 30);
+          const g = Math.round(46 + wave01 * 35);
+          const b = Math.round(104 + wave01 * 50);
+          bgDiscRef.current.style.background = `rgb(${r},${g},${b})`;
+        } else {
+          bgDiscRef.current.style.background = 'rgb(11, 46, 104)';
+        }
       }
 
-      // ── Glow ring: breathe + EXPAND + opacity spike ──
+      // ── Glow ring: opacity + wave (state-differentiated) ──
       if (glowRingRef.current) {
-        let ringOp = s.ringBase + breathRing * 2.5;
-        if (hudState === 'idle') ringOp += Math.sin(now / 2000) * 0.1;
-        ringOp += rRing * 0.35;
-        const grScale = 1.0 + breathRing + rRing * 0.04;
+        let ringOp = s.ringBase + wGlowRing * 3;
+        if (hudState === 'idle' || hudState === 'thinking') ringOp += Math.sin(now / 2000) * 0.1;
+        if (hudState === 'listening') ringOp += s.audioSmooth * 0.15;
+        if (hudState === 'speaking') ringOp += s.audioSmooth * 0.25 + wGlowRing * 3;
+        const grScale = 1.0 + wGlowRing;
         glowRingRef.current.style.opacity = String(Math.min(1, ringOp).toFixed(3));
         glowRingRef.current.style.transform = `translate(-50%, -50%) scale(${grScale.toFixed(4)})`;
       }
 
-      // ── Glow halo: EXPAND + opacity + flicker (thinking) ──
+      // ── Glow halo (state-differentiated) ──
       if (glowRef.current) {
-        let haloOp = s.glowBase;
-        if (hudState === 'thinking') {
-          const noise = Math.sin(s.thinkPhase * 3.7) * 0.15
-            + Math.sin(s.thinkPhase * 7.3) * 0.1;
-          const stepped = Math.round(noise * 6) / 6;
-          haloOp = Math.max(0.55, Math.min(1.0, haloOp + stepped));
-        }
-        haloOp += breathHalo * 2.0 + rHalo * 0.3;
-        const hScale = 1.0 + breathHalo + rHalo * 0.035;
-        glowRef.current.style.opacity = String(Math.min(1, haloOp).toFixed(3));
-        // Override animation transform with scale
+        let haloOp = s.glowBase + wGlowHalo * 3;
+        if (hudState === 'listening') haloOp += s.audioSmooth * 0.1;
+        if (hudState === 'speaking') haloOp += s.audioSmooth * 0.2;
+        haloOp = Math.min(1, haloOp);
+        const hScale = 1.0 + wGlowHalo;
+        glowRef.current.style.opacity = String(haloOp.toFixed(3));
         glowRef.current.style.transform = `translate(-50%, -50%) scale(${hScale.toFixed(4)})`;
       }
 
-      // ── Halo2: expand on ripple ──
+      // ── Halo2 (state-differentiated, weaker version) ──
       if (glowHalo2Ref.current) {
-        const h2Op = Math.min(1, s.halo2Base + breathHalo * 1.5 + rHalo * 0.25);
-        const h2Scale = 1.0 + breathHalo * 0.8 + rHalo * 0.03;
+        let h2Op = s.halo2Base + wGlowHalo * 2;
+        if (hudState === 'listening') h2Op += s.audioSmooth * 0.05;
+        if (hudState === 'speaking') h2Op += s.audioSmooth * 0.1;
+        h2Op = Math.min(1, h2Op);
+        const h2Scale = 1.0 + wGlowHalo * 0.8;
         glowHalo2Ref.current.style.opacity = String(h2Op.toFixed(3));
         glowHalo2Ref.current.style.transform = `translate(-50%, -50%) scale(${h2Scale.toFixed(4)})`;
       }
@@ -611,7 +635,7 @@ export default function App() {
         <div ref={bgDiscRef} className="abs-center layer-bg-disc"></div>
         <div ref={thinRingRef} className="abs-center layer-thin-ring"></div>
         <div ref={gyroRef} className="abs-center layer-gyro-wrapper">
-          <svg width="340" height="340" viewBox="0 0 340 340" style={{display:'block'}}>
+          <svg width="380" height="380" viewBox="0 0 340 340" style={{display:'block'}}>
             <path
               d="M 151.7 27.4 L 170 5 L 188.3 27.4
                  A 145 145 0 0 1 312.6 151.7
@@ -627,6 +651,9 @@ export default function App() {
         </div>
         <div ref={thickRingRef} className="abs-center layer-thick-white"></div>
         <div ref={innerBlueRef} className="abs-center layer-inner-blue"></div>
+        <div ref={boundaryLineRef} className="abs-center layer-boundary-line"></div>
+        <div ref={irisRef} className="abs-center layer-iris"></div>
+        <div ref={whiteOutlineRef} className="abs-center layer-white-outline"></div>
         <div ref={voidRef} className="abs-center layer-void"></div>
         <div ref={el => { pupilRingsRef.current[0] = el }} className="abs-center pupil-ring pupil-1"></div>
         <div ref={el => { pupilRingsRef.current[1] = el }} className="abs-center pupil-ring pupil-2"></div>
