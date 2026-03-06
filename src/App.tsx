@@ -245,6 +245,13 @@ export default function App() {
     // Audio-triggered ripples (listening/speaking)
     ripples: [] as { time: number; intensity: number }[],
     lastRippleTime: 0,
+
+    // Saccade-fixation eye model (listening)
+    eyeCurrentX: 0,
+    eyeCurrentY: 0,
+    eyeTargetX: 0,
+    eyeTargetY: 0,
+    eyeNextMoveTime: 0,
   });
 
   // ═══════════════════════════════════════
@@ -377,11 +384,30 @@ export default function App() {
                       + Math.sin(tSec * 0.71) * 1.5;
       s.ballAngle = 142 + ballDrift;
 
-      // ══ 5b. THINKING EYE DRIFT ══
+      // ══ 5b. SACCADE-FIXATION EYE MODEL (listening) ══
+      // 真人眼球：快速扫视到目标 → 注视停留 → 再扫视
       let eyeX = 0, eyeY = 0;
-      if (hudState === 'thinking') {
-        eyeX = Math.sin(tSec * 0.7) * 6 + Math.sin(tSec * 1.1) * 3;
-        eyeY = Math.cos(tSec * 0.5) * 5 + Math.cos(tSec * 0.9) * 2;
+      if (hudState === 'listening') {
+        if (now > s.eyeNextMoveTime) {
+          // 随机选新注视点，水平幅度大于垂直（真人习惯）
+          const angle = Math.random() * Math.PI * 2;
+          const radius = 6 + Math.random() * 14;
+          s.eyeTargetX = Math.cos(angle) * radius * 1.3; // 水平 ±26px
+          s.eyeTargetY = Math.sin(angle) * radius * 0.8; // 垂直 ±16px
+          // 注视停留 0.6 ~ 2.0 秒
+          s.eyeNextMoveTime = now + 600 + Math.random() * 1400;
+        }
+        // 快速扫视插值（~200ms 到位，模拟 saccade 速度）
+        s.eyeCurrentX += (s.eyeTargetX - s.eyeCurrentX) * 0.15;
+        s.eyeCurrentY += (s.eyeTargetY - s.eyeCurrentY) * 0.15;
+        eyeX = s.eyeCurrentX;
+        eyeY = s.eyeCurrentY;
+      } else {
+        // 非 listening 状态：平滑回中
+        s.eyeCurrentX *= 0.92;
+        s.eyeCurrentY *= 0.92;
+        eyeX = s.eyeCurrentX;
+        eyeY = s.eyeCurrentY;
       }
 
       // ══ 6. GYROSCOPE ══
