@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 type HudState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -12,7 +12,7 @@ interface ControlButtonProps {
 
 const styles = `
   .hud-container {
-    background-color: #010204;
+    background-color: rgb(3, 28, 79);
     font-family: 'Courier New', Courier, monospace;
     overflow: hidden;
   }
@@ -45,10 +45,10 @@ const styles = `
     border-radius: 50%;
     background: radial-gradient(circle,
       transparent                     78%,
-      rgba( 15,  60, 150, 0.06)      80%,
-      rgba( 40, 130, 235, 0.95)      82.6%,
-      rgba( 30, 100, 200, 0.45)      86%,
-      rgba( 10,  45, 120, 0.06)      90%,
+      rgba( 20,  65, 110, 0.06)      80%,
+      rgba( 36, 102, 157, 0.95)      82.6%,
+      rgba( 28,  82, 130, 0.45)      86%,
+      rgba( 15,  55, 100, 0.06)      90%,
       transparent                    93%);
     filter: blur(10px);
     z-index: 0;
@@ -60,9 +60,9 @@ const styles = `
     border-radius: 50%;
     background: radial-gradient(circle at 48% 46%,
       transparent                     77%,
-      rgba( 20,  80, 180, 0.30)      81%,
-      rgba( 50, 140, 240, 0.50)      83%,
-      rgba( 20,  70, 160, 0.12)      87%,
+      rgba( 25,  75, 120, 0.30)      81%,
+      rgba( 40, 110, 165, 0.50)      83%,
+      rgba( 20,  68, 115, 0.12)      87%,
       transparent                    91%);
     filter: blur(12px);
     z-index: 0;
@@ -75,8 +75,8 @@ const styles = `
     border-radius: 50%;
     background: radial-gradient(circle,
       transparent                    91%,
-      rgba(150, 210, 255, 1.00)      95%,
-      rgba( 40, 110, 200, 0.12)      98%,
+      rgba( 60, 140, 200, 1.00)      95%,
+      rgba( 30,  85, 140, 0.12)      98%,
       transparent                    100%);
     filter: blur(3px);
     z-index: 0;
@@ -98,9 +98,9 @@ const styles = `
     border-radius: 50%;
     box-shadow:
       inset 0 0 10px rgba(0, 0, 0, 0.5),
-      0 0  3px  1px rgba(200, 230, 255, 1.00),
-      0 0  8px  3px rgba(120, 190, 255, 0.85),
-      0 0 18px  6px rgba( 50, 130, 210, 0.40);
+      0 0  3px  1px rgba( 80, 150, 200, 1.00),
+      0 0  8px  3px rgba( 50, 120, 175, 0.85),
+      0 0 18px  6px rgba( 36, 102, 157, 0.40);
     z-index: 10;
   }
 
@@ -108,7 +108,7 @@ const styles = `
     width: 380px;
     height: 380px;
     z-index: 20;
-    filter: drop-shadow(0 0 8px rgba(10, 50, 150, 0.4));
+    filter: drop-shadow(0 0 8px rgba(36, 102, 157, 0.4));
   }
 
   .layer-thick-white {
@@ -118,8 +118,8 @@ const styles = `
     border-radius: 50%;
     box-shadow:
       0 0  4px  1px rgba(255, 255, 255, 0.80),
-      0 0 12px  4px rgba(160, 210, 255, 0.50),
-      0 0 25px  8px rgba( 50, 130, 210, 0.18);
+      0 0 12px  4px rgba( 60, 130, 190, 0.50),
+      0 0 25px  8px rgba( 36, 102, 157, 0.18);
     z-index: 30;
   }
 
@@ -184,13 +184,68 @@ const styles = `
     transform: translate(-50%, -50%) translateY(-50px);
     box-shadow:
       0 0 15px rgba(255, 255, 255, 0.9),
-      0 0 35px rgba(50, 150, 255, 0.8);
+      0 0 35px rgba(36, 102, 157, 0.8);
+  }
+
+  /* ===== TERMINAL BACKGROUND ===== */
+  .terminal-bg {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    z-index: 0;
+  }
+  .terminal-scroll {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    line-height: 2.2;
+    color: rgb(31, 105, 176);
+    white-space: nowrap;
+    filter: blur(1.8px);
+    opacity: 0.45;
+    animation: termScroll 90s linear infinite;
+  }
+  .terminal-line {
+    letter-spacing: 0.5px;
+  }
+  @keyframes termScroll {
+    0%   { transform: translateY(0); }
+    100% { transform: translateY(-50%); }
   }
 `;
 
 export default function App() {
   const [hudState, setHudState] = useState<HudState>('idle');
   const [micError, setMicError] = useState('');
+
+  // ── Terminal background text ──
+  const terminalLines = useMemo(() => {
+    const words = [
+      'FAIRY.SYS', 'neural_core.init()', 'PROC_ACTIVE', '0x4F2A8B1C',
+      'SYNC_OK', 'core.load()', 'MEM_ALLOC:94.2%', 'LATENCY:12ms',
+      'MODULE.READY', 'THREAD_7842', 'PIPELINE:STAGE_3', 'SIGNAL_LOCK',
+      'DATA_STREAM', 'INFERENCE...', 'RESPONSE_OK', '████░░░░',
+      'QUANTUM_SYNC', 'DECODE:UTF-8', 'HASH:a3f2b9c1', 'LAYER_12/96',
+      'WEIGHTS_LOADED', 'BATCH_SZ:128', 'EPOCH:347', 'LOSS:0.00128',
+      'ATTENTION_HEAD', 'TRANSFORMER', 'EMBED_DIM:4096', 'SOFTMAX_OK',
+      'TOKEN_GEN:42/s', 'CTX_WIN:32768', 'GPU_UTIL:87%', 'VRAM:23.1GB',
+      'KV_CACHE_HIT', 'BEAM_SEARCH:4', 'TOP_P:0.92', 'TEMP:0.7',
+      'BACKPROP_OK', 'GRAD_NORM:1.2', 'LR:3e-5', 'ADAM_STEP',
+      'CHECKPOINT', 'SERIALIZE', 'RPC_CALL', 'HEARTBEAT_OK',
+      'EMBEDDING', 'TOKENIZE', 'DETOKENIZE', 'SAMPLE',
+      'FFN_FORWARD', 'RESIDUAL_ADD', 'LAYER_NORM', 'ROPE_ENCODE',
+    ];
+    const lines: string[] = [];
+    for (let i = 0; i < 55; i++) {
+      let line = '';
+      const count = 6 + Math.floor(Math.random() * 7);
+      for (let j = 0; j < count; j++) {
+        line += words[Math.floor(Math.random() * words.length)];
+        line += '    ';
+      }
+      lines.push(line);
+    }
+    return lines;
+  }, []);
 
   // ── Element refs ──
   const gyroRef = useRef<HTMLDivElement>(null);
@@ -259,18 +314,36 @@ export default function App() {
   // ═══════════════════════════════════════
   useEffect(() => {
     // ── Water Droplet Ripple Wave ──
-    // Three-phase waveform: contract → expand → damped rebound
-    // All segments join at zero crossings (no discontinuities)
+    // 五阶段波形：渐进收缩 → 屏息 → 爆发释放 → 回弹衰减 → 静止
+    // 所有相位边界连续无跳变
     const dropletWave = (age: number, delay: number): number => {
-      const t = (age - delay) / 1000; // convert ms → seconds
-      if (t < 0) return 0;                                                    // wave hasn't arrived
-      if (t < 0.12) return -Math.sin(Math.PI * t / 0.12) * 0.35;            // contract: quick dip
-      if (t < 0.37) return  Math.sin(Math.PI * (t - 0.12) / 0.25);          // expand: full swell
-      if (t < 0.87) {                                                         // rebound: damped oscillation
-        const dt = t - 0.37;
-        return -Math.sin(2 * Math.PI * 1.5 * dt) * Math.exp(-6 * dt) * 0.25;
+      const t = (age - delay) / 1000;
+      if (t < 0) return 0;                              // 波未到达
+
+      // Phase 1: 渐进收缩 ease-in (0→0.40s) — 一瓣扣一瓣
+      // cosine ease: 起手慢、越收越紧，配合层间延迟形成级联
+      if (t < 0.40) {
+        const p = t / 0.40;
+        return -(1 - Math.cos(Math.PI * p)) * 0.5 * 0.40;  // 0 → -0.40
       }
-      return 0;                                                               // rest
+
+      // Phase 2: 屏息停顿 (0.40→0.55s) — 张力蓄满
+      if (t < 0.55) return -0.40;
+
+      // Phase 3: 爆发释放 ease-out (0.55→0.75s) — 光波脉冲
+      // 快起慢落，到顶速度为零，与 Phase 4 平滑衔接
+      if (t < 0.75) {
+        const p = (t - 0.55) / 0.20;
+        return -0.40 + 1.40 * Math.sin(Math.PI * 0.5 * p); // -0.40 → +1.0
+      }
+
+      // Phase 4: 回弹衰减 (0.75→1.5s) — 阻尼振荡
+      if (t < 1.50) {
+        const dt = t - 0.75;
+        return Math.exp(-4.5 * dt) * Math.cos(2 * Math.PI * 1.3 * dt);
+      }
+
+      return 0;                                          // 静止
     };
 
     const loop = () => {
@@ -349,8 +422,8 @@ export default function App() {
         s.ripples.push({ time: now, intensity: 0.5 });
         s.lastRippleTime = now;
       }
-      // Expire old ripples (>1300ms)
-      s.ripples = s.ripples.filter(r => now - r.time < 1300);
+      // Expire old ripples (>2000ms, 新波形持续 ~1500ms + delay)
+      s.ripples = s.ripples.filter(r => now - r.time < 2000);
 
       // ══ 4. WATER DROPLET RIPPLE (state-differentiated) ══
       const stateMul = hudState === 'listening' ? 2.0 : hudState === 'speaking' ? 3.0 : 1.0;
@@ -368,15 +441,13 @@ export default function App() {
       };
 
       //                                        delay(ms)  amplitude
-      const wVoid      = computeWave(   0, 0.08);
-      const wIris      = computeWave(  50, 0.07);   // iris + boundary-line + white-outline
-      const wInnerBlue = computeWave( 100, 0.055);
+      const wVoid      = computeWave(   0, 0.08);   // 瞳孔+白环+pupil rings
+      const wIris      = computeWave(  70, 0.07);  // 虹膜+描线（涟漪传播延迟）
+      const wInnerBlue = computeWave( 140, 0.055);
       const wThickWht  = computeWave( 170, 0.045);
-      const wPupil1    = computeWave(  80, 0.06);
-      const wPupil2    = computeWave(  60, 0.065);
       const wThinRing  = computeWave( 260, 0.03);   // thin-ring + bg-disc
-      const wGlowRing  = computeWave( 320, 0.02);
-      const wGlowHalo  = computeWave( 380, 0.015);
+      const wGlowRing  = computeWave( 320, 0.05);  // 加大辉光脉冲
+      const wGlowHalo  = computeWave( 380, 0.04);
 
       // ══ 5. BALL — organic float around 142° ══
       const ballDrift = Math.sin(tSec * 0.3)  * 4
@@ -433,13 +504,13 @@ export default function App() {
         // State-differentiated ball glow
         if (hudState === 'listening') {
           const spread = Math.round(35 + s.audioPeak * 20);
-          ballRef.current.style.boxShadow = `0 0 15px rgba(255,255,255,0.9), 0 0 ${spread}px rgba(50,150,255,0.8)`;
+          ballRef.current.style.boxShadow = `0 0 15px rgba(255,255,255,0.9), 0 0 ${spread}px rgba(36,102,157,0.8)`;
         } else if (hudState === 'speaking') {
           const spread = Math.round(35 + s.audioPeak * 40);
           const brightness = (0.8 + s.audioPeak * 0.2).toFixed(2);
-          ballRef.current.style.boxShadow = `0 0 15px rgba(255,255,255,0.9), 0 0 ${spread}px rgba(50,150,255,${brightness})`;
+          ballRef.current.style.boxShadow = `0 0 15px rgba(255,255,255,0.9), 0 0 ${spread}px rgba(36,102,157,${brightness})`;
         } else {
-          ballRef.current.style.boxShadow = '0 0 15px rgba(255,255,255,0.9), 0 0 35px rgba(50,150,255,0.8)';
+          ballRef.current.style.boxShadow = '0 0 15px rgba(255,255,255,0.9), 0 0 35px rgba(36,102,157,0.8)';
         }
       }
 
@@ -449,13 +520,18 @@ export default function App() {
         voidRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) scale(${vScale.toFixed(4)})`;
       }
 
-      // ── Iris + boundary-line + white-outline: shared transform ──
+      // ── White-outline: 与瞳孔(void)同步 ──
+      if (whiteOutlineRef.current) {
+        const woScale = 1.0 + wVoid;
+        whiteOutlineRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) scale(${woScale.toFixed(4)})`;
+      }
+
+      // ── Iris + boundary-line: 涟漪传播延迟，眼球漂移同步 ──
       if (irisRef.current) {
         const irScale = 1.0 + wIris;
-        const irisTransform = `translate(-50%, -50%) translate(${eyeX * 0.9}px, ${eyeY * 0.9}px) scale(${irScale.toFixed(4)})`;
+        const irisTransform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) scale(${irScale.toFixed(4)})`;
         irisRef.current.style.transform = irisTransform;
         if (boundaryLineRef.current) boundaryLineRef.current.style.transform = irisTransform;
-        if (whiteOutlineRef.current) whiteOutlineRef.current.style.transform = irisTransform;
       }
 
       // ── Inner blue ──
@@ -473,20 +549,19 @@ export default function App() {
           const wavePeak = Math.min(Math.abs(wThickWht) / 0.045, 1);
           const spread = Math.round(8 + wavePeak * 20);
           const alpha = (0.18 + wavePeak * 0.4).toFixed(2);
-          thickRingRef.current.style.boxShadow = `0 0 4px 1px rgba(255,255,255,0.8), 0 0 12px 4px rgba(160,210,255,0.5), 0 0 ${spread}px ${Math.round(spread / 2)}px rgba(50,130,210,${alpha})`;
+          thickRingRef.current.style.boxShadow = `0 0 4px 1px rgba(255,255,255,0.8), 0 0 12px 4px rgba(60,130,190,0.5), 0 0 ${spread}px ${Math.round(spread / 2)}px rgba(36,102,157,${alpha})`;
         } else if (hudState === 'listening') {
           const boost = s.audioPeak * 0.15;
-          thickRingRef.current.style.boxShadow = `0 0 4px 1px rgba(255,255,255,${(0.8 + boost).toFixed(2)}), 0 0 12px 4px rgba(160,210,255,${(0.5 + boost).toFixed(2)}), 0 0 25px 8px rgba(50,130,210,0.18)`;
+          thickRingRef.current.style.boxShadow = `0 0 4px 1px rgba(255,255,255,${(0.8 + boost).toFixed(2)}), 0 0 12px 4px rgba(60,130,190,${(0.5 + boost).toFixed(2)}), 0 0 25px 8px rgba(36,102,157,0.18)`;
         } else {
-          thickRingRef.current.style.boxShadow = '0 0 4px 1px rgba(255,255,255,0.8), 0 0 12px 4px rgba(160,210,255,0.5), 0 0 25px 8px rgba(50,130,210,0.18)';
+          thickRingRef.current.style.boxShadow = '0 0 4px 1px rgba(255,255,255,0.8), 0 0 12px 4px rgba(60,130,190,0.5), 0 0 25px 8px rgba(36,102,157,0.18)';
         }
       }
 
-      // ── Pupil rings ──
-      pupilRingsRef.current.forEach((ring, i) => {
+      // ── Pupil rings: 与瞳孔(void)完全同步 ──
+      pupilRingsRef.current.forEach((ring) => {
         if (!ring) return;
-        const pWave = i === 0 ? wPupil1 : wPupil2;
-        const pScale = 1.0 + pWave;
+        const pScale = 1.0 + wVoid;
         ring.style.transform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) scale(${pScale.toFixed(4)})`;
       });
 
@@ -507,9 +582,9 @@ export default function App() {
         // speaking: extra glow expansion
         if (hudState === 'speaking') {
           const glowAlpha = (0.4 + Math.min(Math.abs(wThinRing / 0.03), 1) * 0.4).toFixed(2);
-          thinRingRef.current.style.boxShadow = `inset 0 0 10px rgba(0,0,0,0.5), 0 0 3px 1px rgba(200,230,255,1), 0 0 8px 3px rgba(120,190,255,0.85), 0 0 18px 6px rgba(50,130,210,${glowAlpha})`;
+          thinRingRef.current.style.boxShadow = `inset 0 0 10px rgba(0,0,0,0.5), 0 0 3px 1px rgba(80,150,200,1), 0 0 8px 3px rgba(50,120,175,0.85), 0 0 18px 6px rgba(36,102,157,${glowAlpha})`;
         } else {
-          thinRingRef.current.style.boxShadow = 'inset 0 0 10px rgba(0,0,0,0.5), 0 0 3px 1px rgba(200,230,255,1), 0 0 8px 3px rgba(120,190,255,0.85), 0 0 18px 6px rgba(50,130,210,0.40)';
+          thinRingRef.current.style.boxShadow = 'inset 0 0 10px rgba(0,0,0,0.5), 0 0 3px 1px rgba(80,150,200,1), 0 0 8px 3px rgba(50,120,175,0.85), 0 0 18px 6px rgba(36,102,157,0.40)';
         }
       }
       if (bgDiscRef.current) {
@@ -529,10 +604,10 @@ export default function App() {
 
       // ── Glow ring: opacity + wave (state-differentiated) ──
       if (glowRingRef.current) {
-        let ringOp = s.ringBase + wGlowRing * 3;
+        let ringOp = s.ringBase + wGlowRing * 5;
         if (hudState === 'idle' || hudState === 'thinking') ringOp += Math.sin(now / 2000) * 0.1;
         if (hudState === 'listening') ringOp += s.audioSmooth * 0.15;
-        if (hudState === 'speaking') ringOp += s.audioSmooth * 0.25 + wGlowRing * 3;
+        if (hudState === 'speaking') ringOp += s.audioSmooth * 0.25 + wGlowRing * 5;
         const grScale = 1.0 + wGlowRing;
         glowRingRef.current.style.opacity = String(Math.min(1, ringOp).toFixed(3));
         glowRingRef.current.style.transform = `translate(-50%, -50%) scale(${grScale.toFixed(4)})`;
@@ -540,7 +615,7 @@ export default function App() {
 
       // ── Glow halo (state-differentiated) ──
       if (glowRef.current) {
-        let haloOp = s.glowBase + wGlowHalo * 3;
+        let haloOp = s.glowBase + wGlowHalo * 4;
         if (hudState === 'listening') haloOp += s.audioSmooth * 0.1;
         if (hudState === 'speaking') haloOp += s.audioSmooth * 0.2;
         haloOp = Math.min(1, haloOp);
@@ -551,7 +626,7 @@ export default function App() {
 
       // ── Halo2 (state-differentiated, weaker version) ──
       if (glowHalo2Ref.current) {
-        let h2Op = s.halo2Base + wGlowHalo * 2;
+        let h2Op = s.halo2Base + wGlowHalo * 3;
         if (hudState === 'listening') h2Op += s.audioSmooth * 0.05;
         if (hudState === 'speaking') h2Op += s.audioSmooth * 0.1;
         h2Op = Math.min(1, h2Op);
@@ -643,6 +718,18 @@ export default function App() {
   return (
     <div className="hud-container w-full h-screen flex flex-col items-center justify-center relative">
       <style>{styles}</style>
+
+      {/* 雾化终端文字背景 */}
+      <div className="terminal-bg">
+        <div className="terminal-scroll">
+          {terminalLines.map((line, i) => (
+            <div key={i} className="terminal-line">{line}</div>
+          ))}
+          {terminalLines.map((line, i) => (
+            <div key={`d${i}`} className="terminal-line">{line}</div>
+          ))}
+        </div>
+      </div>
 
       <div className="absolute top-8 left-8 z-50">
         <div className="text-2xl font-bold tracking-widest mb-1 text-slate-100 drop-shadow-[0_0_8px_rgba(0,100,255,0.8)]">FAIRY.SYS_CORE</div>
