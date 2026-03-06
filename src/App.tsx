@@ -382,7 +382,6 @@ export default function App() {
           s.targetThinBright = 0.5;
           break;
       }
-
       // ══ 2. LERP BASE VALUES ══
       const lr = 0.05;
       s.gyroSpeed += (s.targetGyroSpeed - s.gyroSpeed) * lr;
@@ -462,9 +461,9 @@ export default function App() {
         if (now > s.eyeNextMoveTime) {
           // 随机选新注视点，水平幅度大于垂直（真人习惯）
           const angle = Math.random() * Math.PI * 2;
-          const radius = 6 + Math.random() * 14;
-          s.eyeTargetX = Math.cos(angle) * radius * 1.3; // 水平 ±26px
-          s.eyeTargetY = Math.sin(angle) * radius * 0.8; // 垂直 ±16px
+          const radius = 25 + Math.random() * 35;
+          s.eyeTargetX = Math.cos(angle) * radius * 1.3; // 水平 ±78px
+          s.eyeTargetY = Math.sin(angle) * radius * 0.8; // 垂直 ±48px
           // 注视停留 0.6 ~ 2.0 秒
           s.eyeNextMoveTime = now + 600 + Math.random() * 1400;
         }
@@ -531,19 +530,21 @@ export default function App() {
         const irScale = 1.0 + wIris;
         const irisTransform = `translate(-50%, -50%) translate(${eyeX}px, ${eyeY}px) scale(${irScale.toFixed(4)})`;
         irisRef.current.style.transform = irisTransform;
-        if (boundaryLineRef.current) boundaryLineRef.current.style.transform = irisTransform;
+        if (boundaryLineRef.current) {
+          boundaryLineRef.current.style.transform = irisTransform;
+        }
       }
 
       // ── Inner blue ──
       if (innerBlueRef.current) {
         const iScale = 1.0 + wInnerBlue;
-        innerBlueRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.7}px, ${eyeY * 0.7}px) scale(${iScale.toFixed(4)})`;
+        innerBlueRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.95}px, ${eyeY * 0.95}px) scale(${iScale.toFixed(4)})`;
       }
 
       // ── Thick white ring ──
       if (thickRingRef.current) {
         const wScale = 1.0 + wThickWht;
-        thickRingRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.5}px, ${eyeY * 0.5}px) scale(${wScale.toFixed(4)})`;
+        thickRingRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.45}px, ${eyeY * 0.45}px) scale(${wScale.toFixed(4)})`;
         // State-differentiated white ring glow
         if (hudState === 'speaking') {
           const wavePeak = Math.min(Math.abs(wThickWht) / 0.045, 1);
@@ -578,7 +579,7 @@ export default function App() {
         const cg = Math.round(0x78 + (0xb8 - 0x78) * bright);
         const cb = Math.round(0xb9 + (0xe8 - 0xb9) * bright);
         thinRingRef.current.style.borderColor = `rgb(${cr},${cg},${cb})`;
-        thinRingRef.current.style.transform = `translate(-50%, -50%) scale(${tScale.toFixed(4)})`;
+        thinRingRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.4}px, ${eyeY * 0.4}px) scale(${tScale.toFixed(4)})`;
         // speaking: extra glow expansion
         if (hudState === 'speaking') {
           const glowAlpha = (0.4 + Math.min(Math.abs(wThinRing / 0.03), 1) * 0.4).toFixed(2);
@@ -589,7 +590,7 @@ export default function App() {
       }
       if (bgDiscRef.current) {
         const bgScale = 1.0 + wThinRing;
-        bgDiscRef.current.style.transform = `translate(-50%, -50%) scale(${bgScale.toFixed(4)})`;
+        bgDiscRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.4}px, ${eyeY * 0.4}px) scale(${bgScale.toFixed(4)})`;
         // speaking: color shift (RGB lighten)
         if (hudState === 'speaking') {
           const wave01 = Math.max(0, Math.min(wThinRing / 0.03, 1));
@@ -610,7 +611,7 @@ export default function App() {
         if (hudState === 'speaking') ringOp += s.audioSmooth * 0.25 + wGlowRing * 5;
         const grScale = 1.0 + wGlowRing;
         glowRingRef.current.style.opacity = String(Math.min(1, ringOp).toFixed(3));
-        glowRingRef.current.style.transform = `translate(-50%, -50%) scale(${grScale.toFixed(4)})`;
+        glowRingRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.2}px, ${eyeY * 0.2}px) scale(${grScale.toFixed(4)})`;
       }
 
       // ── Glow halo (state-differentiated) ──
@@ -621,7 +622,7 @@ export default function App() {
         haloOp = Math.min(1, haloOp);
         const hScale = 1.0 + wGlowHalo;
         glowRef.current.style.opacity = String(haloOp.toFixed(3));
-        glowRef.current.style.transform = `translate(-50%, -50%) scale(${hScale.toFixed(4)})`;
+        glowRef.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.1}px, ${eyeY * 0.1}px) scale(${hScale.toFixed(4)})`;
       }
 
       // ── Halo2 (state-differentiated, weaker version) ──
@@ -632,7 +633,7 @@ export default function App() {
         h2Op = Math.min(1, h2Op);
         const h2Scale = 1.0 + wGlowHalo * 0.8;
         glowHalo2Ref.current.style.opacity = String(h2Op.toFixed(3));
-        glowHalo2Ref.current.style.transform = `translate(-50%, -50%) scale(${h2Scale.toFixed(4)})`;
+        glowHalo2Ref.current.style.transform = `translate(-50%, -50%) translate(${eyeX * 0.1}px, ${eyeY * 0.1}px) scale(${h2Scale.toFixed(4)})`;
       }
 
       requestRef.current = requestAnimationFrame(loop);
